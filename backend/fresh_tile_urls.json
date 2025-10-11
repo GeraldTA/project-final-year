@@ -1,0 +1,5 @@
+{
+  "ndvi_before": "https://earthengine.googleapis.com/v1/projects/trans-scheme-463112-q8/maps/b525432bc1fb4cad4cb1c2344c10285d-21eede5b391f25bbcdc08862c0496511/tiles/{z}/{x}/{y}",
+  "ndvi_after": "https://earthengine.googleapis.com/v1/projects/trans-scheme-463112-q8/maps/0ebda117cf572efbbe32421699dce3b1-fffded86e3f11ffd9730e6738cdb53cc/tiles/{z}/{x}/{y}",
+  "ndvi_change": "https://earthengine.googleapis.com/v1/projects/trans-scheme-463112-q8/maps/5a1d7fe4ce6c15ca91c32773ba40ccfb-dd7cdc1f66801e168ce317275b586ad6/tiles/{z}/{x}/{y}"
+}

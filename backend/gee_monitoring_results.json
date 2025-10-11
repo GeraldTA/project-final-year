@@ -1,0 +1,31 @@
+{
+  "timestamp": "2025-09-11T14:40:30.757309",
+  "system": "Google Earth Engine Cloud Processing",
+  "region": "Harare, Zimbabwe",
+  "current_vegetation": {
+    "date": "2025-09-09",
+    "cloud_cover": 0.006098,
+    "images_available": 17,
+    "ndvi_mean": 0.2457820939154643,
+    "ndvi_std": 0.13004204544417763,
+    "ndvi_p10": 0.12117624956850047,
+    "ndvi_p25": 0.1601906325635069,
+    "ndvi_p75": 0.30073163534803116,
+    "ndvi_p90": 0.42575695787320633,
+    "vegetation_health": "Moderate",
+    "region": "Harare, Zimbabwe"
+  },
+  "trend_analysis": {
+    "analysis_period": "2025-03-15 to 2025-09-11",
+    "period1_images": 34,
+    "period2_images": 52,
+    "mean_change": -0.1610362600230254,
+    "change_std": 0.11062405564521381,
+    "min_change": -0.7980086654424667,
+    "max_change": 0.8111888132989407,
+    "deforestation_area_hectares": 54715.3099642841,
+    "reforestation_area_hectares": 371.6321896062004,
+    "trend": "Deforestation detected",
+    "region": "Harare, Zimbabwe"
+  }
+}

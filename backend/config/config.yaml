@@ -1,0 +1,120 @@
+# Configuration for Deforestation Detection System
+
+# Region of Interest (Harare, Zimbabwe)
+region:
+  name: "Harare_Zimbabwe"
+  # Coordinates in WGS84 (longitude, latitude)
+  bounds:
+    west: 30.9000  # Western boundary
+    south: -18.0000  # Southern boundary  
+    east: 31.2000   # Eastern boundary
+    north: -17.7000  # Northern boundary
+  
+  # Alternative: specific point with buffer
+  center:
+    longitude: 31.0522
+    latitude: -17.8292
+    buffer_km: 50  # Buffer around center point in kilometers
+
+# Sentinel-2 Data Parameters
+sentinel:
+  # Date range for initial download
+  start_date: "2024-01-01"
+  end_date: "2025-12-31"
+  
+  # Quality filters
+  max_cloud_cover: 10  # Maximum cloud cover percentage (very strict for best quality)
+  min_data_coverage: 80  # Minimum data coverage percentage
+  
+  # Bands to download (for NDVI we need Band 4 (Red) and Band 8 (NIR))
+  bands:
+    - "B02"  # Blue
+    - "B03"  # Green
+    - "B04"  # Red
+    - "B08"  # NIR (Near Infrared)
+    - "B11"  # SWIR1
+    - "B12"  # SWIR2
+    - "SCL"  # Scene Classification Layer
+  
+  # Processing level
+  processing_level: "L2A"  # Surface reflectance
+
+# API Configurations
+apis:
+  # Copernicus Data Space Ecosystem
+  copernicus:
+    base_url: "https://catalogue.dataspace.copernicus.eu/odata/v1"
+    username: "tafadzwabanda2015@gmail.com"
+    password: "Botatronixx@2015"  # Set your password
+    
+  # Google Earth Engine (optional)
+  google_earth_engine:
+    service_account_key: ""  # Path to service account JSON file
+    project_id: ""  # Your GEE project ID
+
+# Scheduling
+scheduler:
+  # Check for new images every N days
+  update_interval_days: 5
+  
+  # Time of day to run checks (24-hour format)
+  check_time: "02:00"  # 2:00 AM
+  
+  # Maximum number of images to download per update
+  max_images_per_update: 10
+
+# Storage Configuration
+storage:
+  # Base directory for data storage
+  base_dir: "./data"
+  
+  # Subdirectories
+  raw_images: "raw"
+  raw: "raw"  # Added for compatibility
+  processed_images: "processed"
+  processed: "processed"  # Added for compatibility
+  metadata: "metadata"
+  
+  # File formats
+  image_format: "GeoTIFF"
+  compression: "LZW"  # Compression for GeoTIFF files
+
+# Processing Parameters
+processing:
+  # NDVI calculation
+  ndvi:
+    threshold_healthy: 0.4  # NDVI threshold for healthy vegetation
+    threshold_stressed: 0.2  # NDVI threshold for stressed vegetation
+    
+  # Change detection
+  change_detection:
+    # Minimum change threshold to consider as deforestation
+    min_change_threshold: -0.3  # Negative indicates vegetation loss
+    
+    # Minimum area of change (in pixels) to consider significant
+    min_change_area_pixels: 100
+    
+    # Temporal window for change detection (months)
+    temporal_window_months: 6
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "deforestation_detection.log"
+  max_file_size_mb: 10
+  backup_count: 5
+
+# Notifications (optional)
+notifications:
+  email:
+    enabled: false
+    smtp_server: ""
+    smtp_port: 587
+    username: ""
+    password: ""
+    recipients: []
+    
+  # Notification triggers
+  send_on_new_images: true
+  send_on_deforestation_detected: true
+  send_on_errors: true

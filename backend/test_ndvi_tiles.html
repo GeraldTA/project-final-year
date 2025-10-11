@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test NDVI Tiles</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+</head>
+<body>
+    <div id="map" style="width: 100%; height: 100vh;"></div>
+    
+    <script>
+        // Create map centered on Harare
+        var map = L.map('map').setView([-17.85, 31.05], 12);
+        
+        // Add base layer
+        var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // Add satellite layer
+        var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri'
+        });
+        
+        // Test NDVI layer with fresh URL
+        var ndviTest = L.tileLayer('https://earthengine.googleapis.com/v1/projects/trans-scheme-463112-q8/maps/projects/trans-scheme-463112-q8/maps/b525432bc1fb4cad4cb1c2344c10285d-a8cdc9bd9f90e6f0af8bec43e6ba3d05/tiles/{z}/{x}/{y}', {
+            attribution: 'Google Earth Engine',
+            opacity: 0.7
+        });
+        
+        // Layer control
+        var baseLayers = {
+            "OpenStreetMap": osm,
+            "Satellite": satellite
+        };
+        
+        var overlays = {
+            "NDVI Test": ndviTest
+        };
+        
+        L.control.layers(baseLayers, overlays).addTo(map);
+        
+        // Add error handling
+        ndviTest.on('tileerror', function(e) {
+            console.log('Tile error:', e);
+            alert('NDVI tile failed to load: ' + e.tile.src);
+        });
+        
+        ndviTest.on('tileload', function(e) {
+            console.log('Tile loaded successfully:', e.tile.src);
+        });
+        
+    </script>
+</body>
+</html>

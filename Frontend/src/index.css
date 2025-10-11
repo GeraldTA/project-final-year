@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Light Theme */
+:root,
+.light {
+  --theme-bg: #f9fafb;
+  --theme-card: #ffffff;
+  --theme-primary: #059669;
+  --theme-secondary: #0ea5e9;
+  --theme-accent: #f59e0b;
+  --theme-border: #e5e7eb;
+  --theme-hover: #f3f4f6;
+  --theme-text-primary: #111827;
+  --theme-text-secondary: #6b7280;
+}
+
+/* Dark Theme */
+.dark {
+  --theme-bg: #111827;
+  --theme-card: #1f2937;
+  --theme-primary: #10b981;
+  --theme-secondary: #3b82f6;
+  --theme-accent: #fbbf24;
+  --theme-border: #374151;
+  --theme-hover: #374151;
+  --theme-text-primary: #f1f5f9;
+  --theme-text-secondary: #94a3b8;
+}
+
+/* Smooth transitions for theme changes */
+* {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}

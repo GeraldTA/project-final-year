@@ -1,0 +1,237 @@
+{
+  "analysis_date": "2025-09-11T14:50:01.978527",
+  "region": "Harare, Zimbabwe",
+  "coordinates": {
+    "west": 30.9,
+    "south": -18.0,
+    "east": 31.2,
+    "north": -17.7
+  },
+  "period_analyzed": {
+    "before": "2025-03-15 to 2025-06-13",
+    "after": "2025-06-13 to 2025-09-11"
+  },
+  "deforestation_statistics": {
+    "mean_ndvi_change": -0.16103626002302537,
+    "change_std_dev": 0.11062405564521381,
+    "pixels_analyzed": 11157916,
+    "deforestation_area_hectares": 54715.30996428411,
+    "deforestation_area_km2": 547.1530996428411
+  },
+  "sample_coordinates": [
+    {
+      "longitude": 30.94627384451902,
+      "latitude": -17.816783327238788
+    },
+    {
+      "longitude": 30.92007781638008,
+      "latitude": -17.709316177847967
+    },
+    {
+      "longitude": 31.060044088387357,
+      "latitude": -17.975010954840023
+    },
+    {
+      "longitude": 30.950386936486836,
+      "latitude": -17.9976176241876
+    },
+    {
+      "longitude": 31.164154822224322,
+      "latitude": -17.96618614089423
+    },
+    {
+      "longitude": 31.165933539087575,
+      "latitude": -17.927111919466853
+    },
+    {
+      "longitude": 31.076092576752593,
+      "latitude": -17.89072813457843
+    },
+    {
+      "longitude": 30.953042121609172,
+      "latitude": -17.82120152527699
+    },
+    {
+      "longitude": 30.90120997647027,
+      "latitude": -17.850057933418462
+    },
+    {
+      "longitude": 31.134747352373598,
+      "latitude": -17.977008844383015
+    },
+    {
+      "longitude": 31.10863601051296,
+      "latitude": -17.70612117083709
+    },
+    {
+      "longitude": 31.03316202016771,
+      "latitude": -17.957433660817117
+    },
+    {
+      "longitude": 31.17663385053734,
+      "latitude": -17.72401130239452
+    },
+    {
+      "longitude": 30.919485495481062,
+      "latitude": -17.922254763881963
+    },
+    {
+      "longitude": 31.1675969407926,
+      "latitude": -17.98956861874901
+    },
+    {
+      "longitude": 31.18640405746392,
+      "latitude": -17.811436933643527
+    },
+    {
+      "longitude": 31.054403487926038,
+      "latitude": -17.70066108972547
+    },
+    {
+      "longitude": 31.003493498295022,
+      "latitude": -17.941588003364924
+    },
+    {
+      "longitude": 31.02169539539284,
+      "latitude": -17.927239003741644
+    },
+    {
+      "longitude": 30.916257069663914,
+      "latitude": -17.78993762857483
+    },
+    {
+      "longitude": 30.96155118143905,
+      "latitude": -17.823363819645294
+    },
+    {
+      "longitude": 31.084668001913197,
+      "latitude": -17.826412201033985
+    },
+    {
+      "longitude": 31.045685996523602,
+      "latitude": -17.98599345550927
+    },
+    {
+      "longitude": 31.16125379875089,
+      "latitude": -17.77782211790303
+    },
+    {
+      "longitude": 30.981309667325444,
+      "latitude": -17.98131712339707
+    },
+    {
+      "longitude": 31.18197545271296,
+      "latitude": -17.74985839442078
+    },
+    {
+      "longitude": 31.12757114631545,
+      "latitude": -17.924495847002746
+    },
+    {
+      "longitude": 30.98506068209027,
+      "latitude": -17.941352595659435
+    },
+    {
+      "longitude": 31.145318759102878,
+      "latitude": -17.76730846181308
+    },
+    {
+      "longitude": 30.956708544684187,
+      "latitude": -17.735528693949128
+    },
+    {
+      "longitude": 31.15288976994857,
+      "latitude": -17.723466113367675
+    },
+    {
+      "longitude": 31.023846790288612,
+      "latitude": -17.920799691920493
+    },
+    {
+      "longitude": 31.067465670130005,
+      "latitude": -17.995364461314658
+    },
+    {
+      "longitude": 31.171606562292446,
+      "latitude": -17.726447684645645
+    },
+    {
+      "longitude": 30.970611814845476,
+      "latitude": -17.876304161459537
+    },
+    {
+      "longitude": 31.18784121356189,
+      "latitude": -17.995459676469167
+    },
+    {
+      "longitude": 31.120985645260788,
+      "latitude": -17.94369837560333
+    },
+    {
+      "longitude": 31.12421745088009,
+      "latitude": -17.97417349080437
+    },
+    {
+      "longitude": 31.174525519090707,
+      "latitude": -17.78514242454251
+    },
+    {
+      "longitude": 30.90981415938769,
+      "latitude": -17.96835576126424
+    },
+    {
+      "longitude": 30.918990234369627,
+      "latitude": -17.710015531827477
+    },
+    {
+      "longitude": 31.015667474108998,
+      "latitude": -17.714541622026243
+    },
+    {
+      "longitude": 31.175689042332092,
+      "latitude": -17.930952460053984
+    },
+    {
+      "longitude": 31.11008889329657,
+      "latitude": -17.830393843399374
+    },
+    {
+      "longitude": 31.171642967083834,
+      "latitude": -17.93216843767561
+    },
+    {
+      "longitude": 31.174947893479075,
+      "latitude": -17.771875890608026
+    },
+    {
+      "longitude": 31.180817035915492,
+      "latitude": -17.908166941540017
+    },
+    {
+      "longitude": 31.173198436108034,
+      "latitude": -17.968657597445276
+    },
+    {
+      "longitude": 30.911356786567765,
+      "latitude": -17.702873309246364
+    },
+    {
+      "longitude": 31.003262699874,
+      "latitude": -17.724972852973732
+    }
+  ],
+  "total_sample_points": 530,
+  "exports": {
+    "change_task_id": "UWJGBBGVSGJMUZ4GDD7ME4MY",
+    "deforestation_task_id": "BQ33OC4VROAYEDXENGN2NSCI",
+    "before_rgb_task_id": "ZUXCM63HTG6ZLFHF5ACT5RH6",
+    "after_rgb_task_id": "GMKUP45CKYENCBOHJ3KROARQ",
+    "export_location": "Google Drive/deforestation_detection/",
+    "note": "Check Google Drive in 10-15 minutes for exported images"
+  },
+  "files_created": {
+    "interactive_map": "deforestation_maps/deforestation_map.html",
+    "coordinates": "deforestation_maps/deforestation_coordinates.json",
+    "report": "deforestation_maps/deforestation_report.json"
+  }
+}

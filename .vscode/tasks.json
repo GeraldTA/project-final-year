@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Deforestation Detection System",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"src/main.py",
+				"--status"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Show System Help",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"run_system.py",
+				"--help"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Run Deforestation Detection System",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"run_system.py",
+				"--status"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
