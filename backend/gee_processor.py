@@ -307,19 +307,27 @@ class GEESentinelProcessor(LoggerMixin):
 
     def create_ndvi_map_tiles(
         self,
-        before_date: str = "2025-03-15",
-        after_date: str = "2025-09-10"
+        before_date: Optional[str] = None,
+        after_date: Optional[str] = None
     ) -> Dict[str, str]:
         """
         Create NDVI map tiles for visualization.
+        If dates not provided, uses most recent available imagery.
         
         Args:
-            before_date: Before date for comparison (YYYY-MM-DD)
-            after_date: After date for comparison (YYYY-MM-DD)
+            before_date: Before date for comparison (YYYY-MM-DD). If None, uses 60 days ago.
+            after_date: After date for comparison (YYYY-MM-DD). If None, uses today.
             
         Returns:
             Dictionary with tile URLs for before, after, and change maps
         """
+        # Use dynamic dates if not provided
+        if after_date is None:
+            after_date = datetime.now().strftime('%Y-%m-%d')
+        if before_date is None:
+            before_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        self.logger.info(f"Creating NDVI tiles for {before_date} to {after_date}")
         try:
             bounds = self.config.get_region_bounds()
             roi = ee.Geometry.Rectangle([

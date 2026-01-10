@@ -35,12 +35,53 @@ export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
   const [detectionData, setDetectionData] = useState<DetectionData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refreshData = () => {
+  const refreshData = async () => {
     setLoading(true);
-    const { alerts: newAlerts, detectionData: newData } = generateMockData(selectedRegion, selectedDate);
-    setAlerts(newAlerts);
-    setDetectionData(newData);
-    setLoading(false);
+    try {
+      // Fetch real detection data from backend
+      const alertsResponse = await fetch('http://localhost:8001/api/detection/alerts?limit=50');
+      const reportResponse = await fetch('http://localhost:8001/api/detection/report');
+      
+      if (alertsResponse.ok && reportResponse.ok) {
+        const alertsData = await alertsResponse.json();
+        const reportData = await reportResponse.json();
+        
+        // Convert backend alert format to frontend Alert type
+        const convertedAlerts: Alert[] = alertsData.alerts.map((alert: any) => ({
+          ...alert,
+          detectedAt: new Date(alert.detectedAt)
+        }));
+        
+        // Build detection data from report
+        const stats = reportData.deforestation_statistics;
+        const newDetectionData: DetectionData = {
+          totalArea: (reportData.coordinates.east - reportData.coordinates.west) * 
+                     (reportData.coordinates.north - reportData.coordinates.south) * 12321, // km² to hectares
+          deforestedArea: stats.deforestation_area_hectares,
+          miningArea: 0, // Not tracked separately in current system
+          activeIncidents: alertsData.total_detections,
+          trendsData: [], // Would need historical data
+          riskZones: [] // Would need risk analysis
+        };
+        
+        setAlerts(convertedAlerts);
+        setDetectionData(newDetectionData);
+      } else {
+        // Fallback to mock data if backend unavailable
+        console.warn('Backend unavailable, using mock data');
+        const { alerts: newAlerts, detectionData: newData } = generateMockData(selectedRegion, selectedDate);
+        setAlerts(newAlerts);
+        setDetectionData(newData);
+      }
+    } catch (error) {
+      console.error('Error fetching detection data:', error);
+      // Fallback to mock data on error
+      const { alerts: newAlerts, detectionData: newData } = generateMockData(selectedRegion, selectedDate);
+      setAlerts(newAlerts);
+      setDetectionData(newData);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
