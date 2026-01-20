@@ -1,0 +1,11 @@
+INFO:     Started server process [13892]
+INFO:     Waiting for application startup.
+INFO:src.ml.api_integration:Initializing BigEarthNet pretrained detector (BIFOLD-BigEarthNetv2-0/resnet50-s2-v0.2.0)...
+INFO:src.ml.bigearthnet_detector:Downloading/loading BigEarthNet weights: BIFOLD-BigEarthNetv2-0/resnet50-s2-v0.2.0
+INFO:src.ml.bigearthnet_detector:BigEarthNet weights loaded cleanly
+INFO:src.ml.bigearthnet_detector:BigEarthNet detector ready on cpu
+INFO:src.ml.api_integration:\u2713 ML system initialized successfully (BigEarthNet)
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0INFO:src.ml.api_integration:Auto-exporting Sentinel-2 composites: before=2024-12-02..2025-01-01 after=2026-01-01..2026-01-31
+ERROR:src.ml.api_integration:Auto change detection failed: No module named 'ee'
+

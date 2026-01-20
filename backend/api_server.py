@@ -1,6 +1,7 @@
 """
 FastAPI server for frontend-backend integration
 Exposes endpoints for deforestation map data and realistic satellite images
+Includes ML-powered deforestation detection
 """
 
 from fastapi import FastAPI, Response, Query
@@ -10,8 +11,15 @@ from pathlib import Path
 import json
 import folium
 from folium.plugins import MarkerCluster
+import logging
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Deforestation Detection API", version="1.0.0")
+
+from src.ml.api_integration import ml_router, initialize_ml_system
 
 # Allow frontend to access API
 app.add_middleware(
@@ -25,6 +33,16 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).parent
 MAPS_DIR = BACKEND_DIR / "deforestation_maps"
 IMAGES_DIR = MAPS_DIR / "images" / "realistic"
+
+
+@app.on_event("startup")
+async def _startup():
+    # Initialize pretrained ML detector on startup
+    initialize_ml_system()
+
+
+# Register ML endpoints (router already has prefix=/api/ml)
+app.include_router(ml_router)
 
 
 @app.get("/api/map")
@@ -106,6 +124,110 @@ def get_image(image_name: str):
         return FileResponse(str(image_path), media_type="image/png")
     return Response("Image not found", status_code=404)
 
+@app.get("/api/ml/preview-geotiff/{filename}")
+def preview_geotiff(filename: str, band_combo: str = Query("rgb", enum=["rgb", "nir", "ndvi"])):
+    """Generate a preview image from a GeoTIFF file.
+    
+    Args:
+        filename: Name of the GeoTIFF file (without path)
+        band_combo: Visualization mode - 'rgb' (true color), 'nir' (false color), or 'ndvi'
+    """
+    import numpy as np
+    import rasterio
+    from PIL import Image
+    import io
+    
+    # Find the GeoTIFF in exports directory
+    geotiff_path = Path("data/raw/gee_exports") / filename
+    
+    if not geotiff_path.exists():
+        return Response("GeoTIFF not found", status_code=404)
+    
+    try:
+        with rasterio.open(geotiff_path) as src:
+            # Read bands (10-band Sentinel-2: B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12)
+            bands = src.read()
+            
+            if band_combo == "rgb":
+                # True color RGB (B04-Red, B03-Green, B02-Blue)
+                if bands.shape[0] >= 4:
+                    r = bands[2]  # B04 (Red)
+                    g = bands[1]  # B03 (Green)
+                    b = bands[0]  # B02 (Blue)
+                else:
+                    return Response("Insufficient bands for RGB", status_code=400)
+            elif band_combo == "nir":
+                # False color NIR (B08-Red, B04-Green, B03-Blue)
+                if bands.shape[0] >= 7:
+                    r = bands[6]  # B08 (NIR)
+                    g = bands[2]  # B04 (Red)
+                    b = bands[1]  # B03 (Green)
+                else:
+                    return Response("Insufficient bands for NIR", status_code=400)
+            else:  # ndvi
+                # NDVI visualization (grayscale)
+                if bands.shape[0] >= 7:
+                    nir = bands[6].astype(np.float32)  # B08
+                    red = bands[2].astype(np.float32)  # B04
+                    
+                    # Normalize if needed
+                    if np.nanmax(nir) > 1.5:
+                        nir = nir / 10000.0
+                        red = red / 10000.0
+                    
+                    ndvi = (nir - red) / (nir + red + 1e-6)
+                    ndvi = np.clip(ndvi, -1, 1)
+                    
+                    # Convert to 0-255 grayscale (green for high NDVI)
+                    ndvi_scaled = ((ndvi + 1) / 2 * 255).astype(np.uint8)
+                    
+                    # Create RGB image with green tint for vegetation
+                    img_array = np.stack([ndvi_scaled * 0.5, ndvi_scaled, ndvi_scaled * 0.5], axis=-1).astype(np.uint8)
+                else:
+                    return Response("Insufficient bands for NDVI", status_code=400)
+            
+            if band_combo != "ndvi":
+                # Normalize reflectance values
+                if np.nanmax(r) > 1.5:
+                    r = r / 10000.0
+                    g = g / 10000.0
+                    b = b / 10000.0
+                
+                # Create mask for no-data pixels (where all bands are 0)
+                no_data_mask = (r == 0) & (g == 0) & (b == 0)
+                
+                # Clip and scale to 0-255
+                r = np.clip(r * 255 * 2.5, 0, 255).astype(np.uint8)  # Brightness boost
+                g = np.clip(g * 255 * 2.5, 0, 255).astype(np.uint8)
+                b = np.clip(b * 255 * 2.5, 0, 255).astype(np.uint8)
+                
+                # Create alpha channel (255 = opaque, 0 = transparent)
+                alpha = np.where(no_data_mask, 0, 255).astype(np.uint8)
+                
+                # Stack into RGBA image
+                img_array = np.stack([r, g, b, alpha], axis=-1)
+            else:
+                # For NDVI, create mask for no-data
+                no_data_mask = (ndvi_scaled == 0)
+                alpha = np.where(no_data_mask, 0, 255).astype(np.uint8)
+                
+                # Add alpha channel to NDVI
+                img_array = np.dstack([img_array, alpha])
+            
+            # Create PIL Image with alpha channel
+            img = Image.fromarray(img_array, mode='RGBA')
+            
+            # Save to bytes buffer
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            buf.seek(0)
+            
+            return Response(content=buf.getvalue(), media_type="image/png")
+            
+    except Exception as e:
+        logger.error(f"Failed to generate preview: {e}")
+        return Response(f"Preview generation failed: {str(e)}", status_code=500)
+
 @app.get("/api/images/list")
 def list_images():
     """List all realistic satellite images."""
@@ -152,7 +274,11 @@ def get_current_tiles():
 
 @app.get("/api/map/with-detections")
 def get_map_with_all_detections(
-    limit: int = Query(100, description="Maximum number of detection markers to show")
+    limit: int = Query(100, description="Maximum number of detection markers to show"),
+    search: str = Query(None, description="Filter by forest/location name"),
+    center_lat: float = Query(None, description="Center map on latitude"),
+    center_lng: float = Query(None, description="Center map on longitude"),
+    zoom: int = Query(None, description="Map zoom level")
 ):
     """Generate an interactive map with all detection markers overlaid."""
     coords_file = MAPS_DIR / "deforestation_coordinates.json"
@@ -164,16 +290,46 @@ def get_map_with_all_detections(
     with open(coords_file, 'r') as f:
         coordinates = json.load(f)
     
+    # Filter by search query if provided
+    if search:
+        zimbabwe_regions = {
+            "hwange": {"bounds": {"min_lat": -19.5, "max_lat": -18.0, "min_lng": 25.5, "max_lng": 27.5}},
+            "zambezi": {"bounds": {"min_lat": -17.5, "max_lat": -15.5, "min_lng": 28.0, "max_lng": 33.0}},
+            "matabeleland": {"bounds": {"min_lat": -22.0, "max_lat": -17.0, "min_lng": 26.0, "max_lng": 30.0}},
+            "gonarezhou": {"bounds": {"min_lat": -21.8, "max_lat": -20.8, "min_lng": 31.0, "max_lng": 32.5}},
+            "mana pools": {"bounds": {"min_lat": -16.0, "max_lat": -15.5, "min_lng": 29.0, "max_lng": 30.0}},
+            "matobo": {"bounds": {"min_lat": -20.7, "max_lat": -20.3, "min_lng": 28.3, "max_lng": 28.8}},
+            "chimanimani": {"bounds": {"min_lat": -20.0, "max_lat": -19.5, "min_lng": 32.5, "max_lng": 33.0}},
+            "eastern highlands": {"bounds": {"min_lat": -20.0, "max_lat": -17.5, "min_lng": 32.0, "max_lng": 33.5}},
+        }
+        
+        search_lower = search.lower()
+        for key, region in zimbabwe_regions.items():
+            if search_lower in key:
+                bounds = region["bounds"]
+                coordinates = [
+                    coord for coord in coordinates
+                    if (bounds["min_lat"] <= coord["latitude"] <= bounds["max_lat"] and 
+                        bounds["min_lng"] <= coord["longitude"] <= bounds["max_lng"])
+                ]
+                break
+    
     with open(report_file, 'r') as f:
         report = json.load(f)
     
-    # Create map centered on region
-    center_lat = (report['coordinates']['south'] + report['coordinates']['north']) / 2
-    center_lon = (report['coordinates']['west'] + report['coordinates']['east']) / 2
+    # Create map centered on specified location or default
+    if center_lat and center_lng:
+        map_center_lat = center_lat
+        map_center_lon = center_lng
+        map_zoom = zoom if zoom else 10
+    else:
+        map_center_lat = (report['coordinates']['south'] + report['coordinates']['north']) / 2
+        map_center_lon = (report['coordinates']['west'] + report['coordinates']['east']) / 2
+        map_zoom = 11
     
     m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=11,
+        location=[map_center_lat, map_center_lon],
+        zoom_start=map_zoom,
         tiles='OpenStreetMap'
     )
     
@@ -338,6 +494,176 @@ def get_map_with_all_detections(
             Mean NDVI Change: {report['deforestation_statistics']['mean_ndvi_change']:.3f}<br>
             Total Area: {report['deforestation_statistics']['deforestation_area_hectares']:,.0f} ha<br>
             Analysis Date: {report['analysis_date'][:10]}
+        </p>
+    </div>
+    '''
+    m.get_root().html.add_child(folium.Element(legend_html))
+    
+    # Add layer control
+    folium.LayerControl().add_to(m)
+    
+    # Return HTML
+    html = m._repr_html_()
+    return Response(content=html, media_type="text/html")
+
+# Store latest ML detection for map display
+latest_ml_detection = None
+
+@app.post("/api/map/set-ml-detection")
+async def set_ml_detection(request: Request):
+    """Store ML detection data for map display."""
+    global latest_ml_detection
+    data = await request.json()
+    latest_ml_detection = data
+    return JSONResponse({"status": "success", "message": "Detection data stored"})
+
+@app.get("/api/map/with-ml-detection")
+async def get_map_with_ml_detection():
+    """Generate an interactive map with ML detection results marked."""
+    global latest_ml_detection
+    
+    if not latest_ml_detection:
+        # Return default map without markers
+        return await get_map_with_all_detections()
+    
+    data = latest_ml_detection
+    
+    # Extract detection info from stored data
+    detection_lat = data.get('latitude')
+    detection_lng = data.get('longitude')
+    prediction = data.get('prediction', 'Change Detected')
+    confidence = data.get('confidence', 0.0)
+    before_date = data.get('before_date', 'Unknown')
+    after_date = data.get('after_date', 'Unknown')
+    zoom_level = data.get('zoom', 12)
+    
+    if not detection_lat or not detection_lng:
+        return JSONResponse({"error": "Missing latitude or longitude"}, status_code=400)
+    
+    # Create map centered on detection
+    m = folium.Map(
+        location=[detection_lat, detection_lng],
+        zoom_start=zoom_level,
+        tiles='OpenStreetMap'
+    )
+    
+    # Add satellite layer
+    folium.TileLayer(
+        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attr='Esri',
+        name='Satellite',
+        overlay=False,
+        control=True
+    ).add_to(m)
+    
+    # Add NDVI layers if available
+    try:
+        tiles_file = BACKEND_DIR / "fresh_tile_urls.json"
+        if tiles_file.exists():
+            with open(tiles_file, 'r') as f:
+                tiles = json.load(f)
+            
+            if 'before' in tiles:
+                folium.TileLayer(
+                    tiles=tiles['before'],
+                    attr='Google Earth Engine',
+                    name='NDVI Before',
+                    overlay=True,
+                    control=True,
+                    opacity=0.6
+                ).add_to(m)
+            
+            if 'after' in tiles:
+                folium.TileLayer(
+                    tiles=tiles['after'],
+                    attr='Google Earth Engine',
+                    name='NDVI After',
+                    overlay=True,
+                    control=True,
+                    opacity=0.6
+                ).add_to(m)
+            
+            if 'change' in tiles:
+                folium.TileLayer(
+                    tiles=tiles['change'],
+                    attr='Google Earth Engine',
+                    name='NDVI Change (Red=Deforestation)',
+                    overlay=True,
+                    control=True,
+                    opacity=0.7
+                ).add_to(m)
+    except Exception as e:
+        print(f"Could not load NDVI tiles: {e}")
+    
+    # Determine marker color based on prediction
+    if 'deforestation' in prediction.lower() or 'change' in prediction.lower():
+        color = 'red'
+        icon = 'warning-sign'
+        severity = 'Detected'
+    else:
+        color = 'green'
+        icon = 'ok-sign'
+        severity = 'No Change'
+    
+    # Create detailed popup
+    popup_html = f"""
+    <div style="font-family: Arial; width: 320px;">
+        <h3 style="color: {color}; margin: 0 0 15px 0; text-align: center; background: linear-gradient(135deg, {color}22 0%, {color}44 100%); padding: 12px; border-radius: 8px; font-size: 16px;">
+            {'🚨 ML Detection Alert' if color == 'red' else '✓ ML Detection - No Change'}
+        </h3>
+        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+            <p style="margin: 6px 0;"><b>📍 Location:</b><br>{detection_lat:.6f}, {detection_lng:.6f}</p>
+            <p style="margin: 6px 0;"><b>🤖 AI Prediction:</b> <span style="color: {color}; font-weight: bold;">{prediction}</span></p>
+            <p style="margin: 6px 0;"><b>📊 Confidence:</b> {confidence:.1f}%</p>
+        </div>
+        <div style="background: #e3f2fd; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+            <p style="margin: 6px 0;"><b>📅 Before Date:</b> {before_date}</p>
+            <p style="margin: 6px 0;"><b>📅 After Date:</b> {after_date}</p>
+        </div>
+        <div style="background: {'#ffebee' if color == 'red' else '#e8f5e9'}; padding: 10px; border-radius: 6px; text-align: center;">
+            <p style="margin: 0; font-size: 13px; color: {'#c62828' if color == 'red' else '#2e7d32'}; font-weight: bold;">
+                {'⚠️ Requires Investigation' if color == 'red' else '✓ Area Stable'}
+            </p>
+        </div>
+    </div>
+    """
+    
+    # Add detection marker
+    folium.Marker(
+        location=[detection_lat, detection_lng],
+        popup=folium.Popup(popup_html, max_width=350),
+        icon=folium.Icon(color=color, icon=icon, prefix='glyphicon'),
+        tooltip=f"ML Detection: {prediction}"
+    ).add_to(m)
+    
+    # Add detection area circle
+    folium.Circle(
+        location=[detection_lat, detection_lng],
+        radius=500,  # 500m radius
+        color=color,
+        fill=True,
+        fillColor=color,
+        fillOpacity=0.15,
+        weight=2,
+        popup=f"Detection Area (~500m radius)"
+    ).add_to(m)
+    
+    # Add legend
+    legend_html = f'''
+    <div style="position: fixed; top: 10px; left: 10px; width: 280px; 
+                background-color: white; border: 2px solid {color}; z-index: 9999; 
+                font-size: 13px; padding: 12px; border-radius: 8px;
+                box-shadow: 0 0 15px rgba(0,0,0,0.25);">
+        <h4 style="margin: 0 0 10px 0; color: {color}; border-bottom: 2px solid {color}; padding-bottom: 8px;">
+            🤖 ML Detection Results
+        </h4>
+        <p style="margin: 5px 0;"><b>Status:</b> <span style="color: {color};">{severity}</span></p>
+        <p style="margin: 5px 0;"><b>Confidence:</b> {confidence:.1f}%</p>
+        <p style="margin: 5px 0;"><b>Date Range:</b> {before_date} → {after_date}</p>
+        <hr style="margin: 10px 0; border-color: #ddd;">
+        <p style="margin: 5px 0; font-size: 11px; color: #666;">
+            Click marker for detailed information<br>
+            Use layer control to toggle NDVI views
         </p>
     </div>
     '''
@@ -526,6 +852,156 @@ def get_report():
             report = json.load(f)
         return JSONResponse(report)
     return JSONResponse({"error": "Report not found"}, status_code=404)
+
+@app.get("/api/search/location")
+def search_location(query: str = Query(..., description="Search query for forest/location name")):
+    """
+    Search for deforestation detections by forest/location name.
+    Returns coordinates matching the search query.
+    """
+    try:
+        # Known forest/region names in Zimbabwe with approximate bounding boxes
+        zimbabwe_regions = {
+            "hwange": {
+                "name": "Hwange National Park", 
+                "bounds": {"min_lat": -19.5, "max_lat": -18.0, "min_lng": 25.5, "max_lng": 27.5},
+                "center": {"lat": -18.75, "lng": 26.5}
+            },
+            "zambezi": {
+                "name": "Zambezi Valley", 
+                "bounds": {"min_lat": -17.5, "max_lat": -15.5, "min_lng": 28.0, "max_lng": 33.0},
+                "center": {"lat": -16.5, "lng": 30.5}
+            },
+            "matabeleland": {
+                "name": "Matabeleland", 
+                "bounds": {"min_lat": -22.0, "max_lat": -17.0, "min_lng": 26.0, "max_lng": 30.0},
+                "center": {"lat": -19.5, "lng": 28.0}
+            },
+            "gonarezhou": {
+                "name": "Gonarezhou National Park", 
+                "bounds": {"min_lat": -21.8, "max_lat": -20.8, "min_lng": 31.0, "max_lng": 32.5},
+                "center": {"lat": -21.3, "lng": 31.75}
+            },
+            "mana pools": {
+                "name": "Mana Pools", 
+                "bounds": {"min_lat": -16.0, "max_lat": -15.5, "min_lng": 29.0, "max_lng": 30.0},
+                "center": {"lat": -15.75, "lng": 29.5}
+            },
+            "matobo": {
+                "name": "Matobo Hills", 
+                "bounds": {"min_lat": -20.7, "max_lat": -20.3, "min_lng": 28.3, "max_lng": 28.8},
+                "center": {"lat": -20.5, "lng": 28.55}
+            },
+            "chimanimani": {
+                "name": "Chimanimani", 
+                "bounds": {"min_lat": -20.0, "max_lat": -19.5, "min_lng": 32.5, "max_lng": 33.0},
+                "center": {"lat": -19.75, "lng": 32.75}
+            },
+            "eastern highlands": {
+                "name": "Eastern Highlands", 
+                "bounds": {"min_lat": -20.0, "max_lat": -17.5, "min_lng": 32.0, "max_lng": 33.5},
+                "center": {"lat": -18.75, "lng": 32.75}
+            },
+        }
+        
+        # Load detection coordinates
+        coords_file = MAPS_DIR / "deforestation_coordinates.json"
+        if not coords_file.exists():
+            return JSONResponse({"results": [], "message": "No detection data available"})
+        
+        with open(coords_file, "r") as f:
+            all_coords = json.load(f)
+        
+        # Search for matching region
+        query_lower = query.lower()
+        matching_coords = []
+        matched_region = None
+        location_info = None
+        
+        for key, region in zimbabwe_regions.items():
+            if query_lower in key or query_lower in region["name"].lower():
+                matched_region = region["name"]
+                location_info = {
+                    "name": region["name"],
+                    "bounds": region["bounds"],
+                    "center": region["center"]
+                }
+                bounds = region["bounds"]
+                
+                # Filter coordinates within this region
+                for coord in all_coords:
+                    lat = coord["latitude"]
+                    lng = coord["longitude"]
+                    if (bounds["min_lat"] <= lat <= bounds["max_lat"] and 
+                        bounds["min_lng"] <= lng <= bounds["max_lng"]):
+                        matching_coords.append(coord)
+                break
+        
+        if not matched_region:
+            return JSONResponse({
+                "results": [],
+                "location": None,
+                "message": f"No region found matching '{query}'. Try: Hwange, Zambezi Valley, Matabeleland, Gonarezhou, Mana Pools, Matobo, Chimanimani, or Eastern Highlands"
+            })
+        
+        return JSONResponse({
+            "results": matching_coords[:100],  # Limit to 100 results
+            "total": len(matching_coords),
+            "region": matched_region,
+            "location": location_info,
+            "message": f"Found {len(matching_coords)} detections in {matched_region}"
+        })
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e), "results": [], "location": None}, status_code=500)
+
+@app.post("/api/monitoring/start")
+async def start_monitoring(request: dict):
+    """
+    Start monitoring a specific location for deforestation.
+    Saves the monitoring configuration for the scheduler.
+    """
+    try:
+        # Load or create monitoring configuration
+        monitoring_file = BACKEND_DIR / "config" / "monitored_locations.json"
+        monitoring_file.parent.mkdir(exist_ok=True)
+        
+        if monitoring_file.exists():
+            with open(monitoring_file, 'r') as f:
+                monitored = json.load(f)
+        else:
+            monitored = {"locations": []}
+        
+        # Add new monitoring location
+        location_entry = {
+            "name": request.get("location"),
+            "region": request.get("region"),
+            "bounds": request.get("bounds"),
+            "start_date": request.get("start_date"),
+            "last_check": None,
+            "check_interval_days": 5,
+            "active": True
+        }
+        
+        # Check if already monitoring
+        existing = next((loc for loc in monitored["locations"] if loc["name"] == location_entry["name"]), None)
+        if existing:
+            existing["active"] = True
+            existing["start_date"] = location_entry["start_date"]
+        else:
+            monitored["locations"].append(location_entry)
+        
+        # Save updated configuration
+        with open(monitoring_file, 'w') as f:
+            json.dump(monitored, f, indent=2)
+        
+        return JSONResponse({
+            "success": True,
+            "message": f"Monitoring started for {location_entry['name']}. System will check every 5 days.",
+            "location": location_entry
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
 # Add more endpoints as needed for processing, status, etc.
 

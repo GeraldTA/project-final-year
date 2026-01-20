@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Alert, DetectionData, Region } from '../types';
 import { generateMockData } from '../utils/mockData';
+import { apiFetch } from '../utils/api';
 
 interface DataContextType {
   selectedRegion: Region;
@@ -39,8 +40,8 @@ export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
     setLoading(true);
     try {
       // Fetch real detection data from backend
-      const alertsResponse = await fetch('http://localhost:8001/api/detection/alerts?limit=50');
-      const reportResponse = await fetch('http://localhost:8001/api/detection/report');
+      const alertsResponse = await apiFetch('/api/detection/alerts?limit=50');
+      const reportResponse = await apiFetch('/api/detection/report');
       
       if (alertsResponse.ok && reportResponse.ok) {
         const alertsData = await alertsResponse.json();

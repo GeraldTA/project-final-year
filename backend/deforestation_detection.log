@@ -641,3 +641,15 @@
 2025-09-17 15:32:15 - deforestation_detection.TaskScheduler - INFO - Processing callback set
 2025-09-17 15:32:15 - deforestation_detection.TaskScheduler - INFO - Notification callback set
 2025-09-17 15:32:15 - deforestation_detection.DeforestationPipeline - INFO - Deforestation detection pipeline initialized
+2026-01-15 16:41:08 - deforestation_detection.SentinelDownloader - INFO - Sentinel downloader initialized
+2026-01-15 16:41:09 - deforestation_detection.GEEClient - INFO - Read GEE project ID from file: trans-scheme-463112-q8
+2026-01-15 16:41:13 - deforestation_detection.GEEClient - INFO - Authenticated with GEE using stored credentials
+2026-01-15 16:41:13 - deforestation_detection.GEEClient - INFO - Google Earth Engine client initialized
+2026-01-15 16:41:13 - deforestation_detection.NDVICalculator - INFO - NDVI calculator initialized
+2026-01-15 16:41:13 - deforestation_detection.ChangeDetector - INFO - Change detector initialized
+2026-01-15 16:41:13 - deforestation_detection.TaskScheduler - INFO - Task scheduler initialized
+2026-01-15 16:41:13 - deforestation_detection.NotificationManager - INFO - Notification manager initialized
+2026-01-15 16:41:13 - deforestation_detection.TaskScheduler - INFO - Download callback set
+2026-01-15 16:41:13 - deforestation_detection.TaskScheduler - INFO - Processing callback set
+2026-01-15 16:41:13 - deforestation_detection.TaskScheduler - INFO - Notification callback set
+2026-01-15 16:41:13 - deforestation_detection.DeforestationPipeline - INFO - Deforestation detection pipeline initialized

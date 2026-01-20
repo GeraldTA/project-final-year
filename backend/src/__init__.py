@@ -9,6 +9,15 @@ __version__ = "0.1.0"
 __author__ = "Your Name"
 __email__ = "your.email@example.com"
 
-from .main import DeforestationPipeline
+# Keep package imports lightweight. Importing `src` should not pull in optional
+# runtime dependencies (scheduler, external APIs, etc.).
 
 __all__ = ["DeforestationPipeline"]
+
+
+def __getattr__(name: str):
+	if name == "DeforestationPipeline":
+		from .main import DeforestationPipeline
+
+		return DeforestationPipeline
+	raise AttributeError(name)

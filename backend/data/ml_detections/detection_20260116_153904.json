@@ -1,0 +1,39 @@
+{
+  "status": "success",
+  "prediction": "Non-Forest",
+  "forest_probability": 0.0008730822592042387,
+  "coordinates": {
+    "latitude": null,
+    "longitude": null
+  },
+  "ndvi_mean": 0.6923065781593323,
+  "detection_date": "2026-01-16T15:39:04.202428",
+  "image_path": "C:\\Users\\Banda\\Documents\\code for project\\backend\\data\\raw\\sample_before_10band.tif",
+  "bbox_wgs84": {
+    "west": 31.0,
+    "south": -17.0256,
+    "east": 31.0256,
+    "north": -17.0
+  },
+  "class_probabilities": {
+    "Agro-forestry areas": 1.15962448035134e-05,
+    "Arable land": 0.03209672123193741,
+    "Beaches, dunes, sands": 2.3524057723989245e-06,
+    "Broad-leaved forest": 3.789600668824278e-05,
+    "Coastal wetlands": 1.4453660696744919e-05,
+    "Complex cultivation patterns": 2.739501178439241e-05,
+    "Coniferous forest": 5.0125268899137154e-05,
+    "Industrial or commercial units": 1.3525124813895673e-05,
+    "Inland waters": 0.00015218358021229506,
+    "Inland wetlands": 0.00015439251728821546,
+    "Land principally occupied by agriculture, with significant areas of natural vegetation": 0.00012051235535182059,
+    "Marine waters": 5.817647615913302e-05,
+    "Mixed forest": 1.61216903507011e-05,
+    "Moors, heathland and sclerophyllous vegetation": 1.0115105624208809e-06,
+    "Natural grassland and sparsely vegetated areas": 1.3831684555043466e-05,
+    "Pastures": 1.559076554258354e-05,
+    "Permanent crops": 0.00010334445687476546,
+    "Transitional woodland, shrub": 0.0008730822592042387,
+    "Urban fabric": 4.912950771540636e-06
+  }
+}

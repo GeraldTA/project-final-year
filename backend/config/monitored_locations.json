@@ -1,0 +1,18 @@
+{
+  "locations": [
+    {
+      "name": "Hwange National Park",
+      "region": "hwange",
+      "bounds": {
+        "min_lat": -19.5,
+        "max_lat": -18,
+        "min_lng": 25.5,
+        "max_lng": 27.5
+      },
+      "start_date": "2026-01-20T17:56:13.075Z",
+      "last_check": null,
+      "check_interval_days": 5,
+      "active": true
+    }
+  ]
+}

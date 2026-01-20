@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Layers, ZoomIn, ZoomOut, Download, Eye, RefreshCw, Calendar } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { RefreshCw, Calendar, Search, Eye } from 'lucide-react';
 import { useData } from '../context/DataContext';
+import { apiFetch, apiUrl } from '../utils/api';
 
 const MapViewPage: React.FC = () => {
-  const navigate = useNavigate();
-  const { alerts, detectionData, selectedRegion, selectedDate } = useData();
+  const { alerts, detectionData, selectedRegion } = useData();
   const [mapLayer, setMapLayer] = useState<'satellite' | 'thermal' | 'ndvi'>('satellite');
   const [zoom, setZoom] = useState(12);
   const [showDetections, setShowDetections] = useState(true);
@@ -15,15 +14,268 @@ const MapViewPage: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const [mapKey, setMapKey] = useState(0); // Used to force iframe reload only when needed
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<any>(null);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [mapError, setMapError] = useState(false);
+  const [mlStatus, setMlStatus] = useState<{ model_loaded: boolean; model_type?: string; pretrained_repo?: string } | null>(null);
+  const [mlStatusError, setMlStatusError] = useState<string | null>(null);
+  const [mlAutoRunning, setMlAutoRunning] = useState(false);
+  const [mlAutoResult, setMlAutoResult] = useState<any>(null);
+  const [mlAutoError, setMlAutoError] = useState<string | null>(null);
+  const [seasonalWarning, setSeasonalWarning] = useState<string | null>(null);
+  const [showBeforeAfterImages, setShowBeforeAfterImages] = useState(false);
+  const [imageVisualization, setImageVisualization] = useState<'rgb' | 'nir' | 'ndvi'>('rgb');
+  const [gridScanRunning, setGridScanRunning] = useState(false);
+  const [gridScanResult, setGridScanResult] = useState<any>(null);
+  const [gridScanError, setGridScanError] = useState<string | null>(null);
+  const [selectedCell, setSelectedCell] = useState<any>(null);
+  const [showCellImages, setShowCellImages] = useState(false);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+  const [imageZoom, setImageZoom] = useState(1);
+  const [detectionMapUrl, setDetectionMapUrl] = useState<string | null>(null);
+
+  const fetchMlStatus = async () => {
+    try {
+      setMlStatusError(null);
+      const res = await apiFetch('/api/ml/status');
+      if (!res.ok) throw new Error(`ML status request failed (${res.status})`);
+      const data = await res.json();
+      setMlStatus(data);
+    } catch (e: any) {
+      setMlStatus(null);
+      setMlStatusError(e?.message || 'ML status unavailable');
+    }
+  };
+
+  useEffect(() => {
+    fetchMlStatus();
+  }, []);
+
+  const updateMapWithDetection = async (detectionData: any) => {
+    try {
+      const payload = {
+        latitude: selectedLocation?.latitude || (selectedLocation?.bounds ? 
+          (selectedLocation.bounds.min_lat + selectedLocation.bounds.max_lat) / 2 : 0),
+        longitude: selectedLocation?.longitude || (selectedLocation?.bounds ? 
+          (selectedLocation.bounds.min_lng + selectedLocation.bounds.max_lng) / 2 : 0),
+        prediction: detectionData.prediction || 'Unknown',
+        confidence: detectionData.confidence || 0,
+        before_date: detectionData.before?.date || beforeDate || 'Unknown',
+        after_date: detectionData.after?.date || afterDate || 'Unknown',
+        zoom: 13
+      };
+
+      const res = await apiFetch('/api/map/set-ml-detection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        // Set the detection map URL which will cause iframe to reload
+        setDetectionMapUrl(apiUrl('/api/map/with-ml-detection'));
+        setMapKey(prev => prev + 1); // Force map reload
+        console.log('✅ Detection map will be displayed');
+      }
+    } catch (e) {
+      console.error('Failed to update map with detection:', e);
+    }
+  };
+
+  const runGridScan = async () => {
+    setGridScanError(null);
+    setGridScanResult(null);
+    setSelectedCell(null);
+
+    if (!mlStatus?.model_loaded) {
+      setGridScanError('ML model is offline. Start the backend first.');
+      return;
+    }
+    if (!selectedLocation?.bounds) {
+      setGridScanError('Select a location using Search first.');
+      return;
+    }
+    if (!beforeDate || !afterDate) {
+      setGridScanError('Pick both Before and After dates.');
+      return;
+    }
+
+    const b = selectedLocation.bounds;
+    const params = new URLSearchParams({
+      location_name: selectedLocation.name || 'Unknown',
+      before_date: beforeDate,
+      after_date: afterDate,
+      west: String(b.min_lng ?? b.west),
+      south: String(b.min_lat ?? b.south),
+      east: String(b.max_lng ?? b.east),
+      north: String(b.max_lat ?? b.north),
+      grid_size: '3',
+      window_days: '30',
+      max_cloud_cover: '50',
+      dimensions: '256'
+    });
+
+    setGridScanRunning(true);
+    try {
+      const res = await apiFetch(`/api/ml/scan-area-grid?${params.toString()}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error(`Grid scan failed (${res.status})`);
+      const data = await res.json();
+      console.log('Grid scan result:', data);
+      console.log('First cell:', data.cells?.[0]);
+      setGridScanResult(data);
+    } catch (e: any) {
+      setGridScanError(e?.message || 'Grid scan failed');
+    } finally {
+      setGridScanRunning(false);
+    }
+  };
+
+  const runMlAutoChangeDetection = async () => {
+    setMlAutoError(null);
+    setMlAutoResult(null);
+    setSeasonalWarning(null);
+
+    if (!mlStatus?.model_loaded) {
+      setMlAutoError('ML model is offline. Start the backend first.');
+      return;
+    }
+    if (!selectedLocation?.bounds) {
+      setMlAutoError('Select a location using Search first (so we have bounds).');
+      return;
+    }
+    if (!beforeDate || !afterDate) {
+      setMlAutoError('Pick both Before and After dates.');
+      return;
+    }
+
+    const b = selectedLocation.bounds;
+    const params = new URLSearchParams({
+      before_date: beforeDate,
+      after_date: afterDate,
+      west: String(b.min_lng ?? b.west),
+      south: String(b.min_lat ?? b.south),
+      east: String(b.max_lng ?? b.east),
+      north: String(b.max_lat ?? b.north),
+      window_days: '30',
+      max_cloud_cover: '30',
+      scale: '10',
+      dimensions: '512'
+    });
+
+    setMlAutoRunning(true);
+    try {
+      const res = await apiFetch(`/api/ml/detect-change-auto?${params.toString()}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error(`Auto ML request failed (${res.status})`);
+      const data = await res.json();
+      console.log('📊 ML Auto Result:', data);
+      console.log('📁 Exports:', data.exports);
+      if (data.exports) {
+        console.log('   Before path:', data.exports.before?.path);
+        console.log('   After path:', data.exports.after?.path);
+        if (data.exports.before?.path) {
+          const beforeFile = data.exports.before.path.split('/').pop();
+          console.log('   ✅ Before filename:', beforeFile);
+        }
+      }
+      setMlAutoResult(data);
+      if (data.seasonal_warning) {
+        setSeasonalWarning(data.seasonal_warning);
+      }
+      
+      // Update map with detection markers
+      if (data.prediction && selectedLocation?.latitude && selectedLocation?.longitude) {
+        updateMapWithDetection(data);
+      }
+    } catch (e: any) {
+      setMlAutoError(e?.message || 'Auto ML request failed');
+    } finally {
+      setMlAutoRunning(false);
+    }
+  };
 
   // Build backend map URL with date params if provided
   const buildMapUrl = () => {
+    // If we have a detection map, use that
+    if (detectionMapUrl) {
+      return detectionMapUrl;
+    }
+    
+    // Use fallback to static map if API server is having issues
+    if (mapError) {
+      return `http://localhost:8080/realistic_satellite_photos.html`;
+    }
+    
     // Use the detection markers endpoint that shows all 100+ deforestation sites
     const params = new URLSearchParams();
     params.append('limit', '100'); // Show up to 100 detection markers
     if (beforeDate) params.append('before_date', beforeDate);
     if (afterDate) params.append('after_date', afterDate);
-    return `http://localhost:8001/api/map/with-detections?${params.toString()}`;
+    if (searchQuery) params.append('search', searchQuery);
+    if (selectedLocation) {
+      params.append('center_lat', selectedLocation.center.lat.toString());
+      params.append('center_lng', selectedLocation.center.lng.toString());
+      params.append('zoom', '10');
+    }
+    return apiUrl(`/api/map/with-detections?${params.toString()}`);
+  };
+
+  // Search for forest/location
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setSelectedLocation(null);
+      setMapKey(prev => prev + 1);
+      return;
+    }
+    
+    try {
+      const response = await apiFetch(`/api/search/location?query=${encodeURIComponent(searchQuery)}`);
+      const data = await response.json();
+      setSearchResults(data.results || []);
+      setSelectedLocation(data.location || null);
+      setMapKey(prev => prev + 1); // Reload map with search filter
+    } catch (error) {
+      console.error('Search failed:', error);
+      setSearchResults([]);
+      setSelectedLocation(null);
+    }
+  };
+
+  // Start monitoring a location
+  const handleStartMonitoring = async () => {
+    if (!selectedLocation) return;
+    
+    setIsMonitoring(true);
+    try {
+      const response = await apiFetch('/api/monitoring/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: selectedLocation.name,
+          region: searchQuery,
+          bounds: selectedLocation.bounds,
+          start_date: new Date().toISOString()
+        })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        alert(`✅ Monitoring started for ${selectedLocation.name}\n\nThe system will check this area every 5 days for deforestation activity.`);
+      } else {
+        alert('Failed to start monitoring: ' + (data.message || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Failed to start monitoring:', error);
+      alert('Failed to start monitoring. Please try again.');
+    } finally {
+      setIsMonitoring(false);
+    }
   };
 
   const backendMapUrl = buildMapUrl();
@@ -37,7 +289,7 @@ const MapViewPage: React.FC = () => {
       if (beforeDate) params.append('before_date', beforeDate);
       if (afterDate) params.append('after_date', afterDate);
       
-      const response = await fetch(`http://localhost:8001/api/tiles/generate?${params.toString()}`);
+      const response = await apiFetch(`/api/tiles/generate?${params.toString()}`);
       const data = await response.json();
       
       if (data.success) {
@@ -53,23 +305,12 @@ const MapViewPage: React.FC = () => {
     }
   };
 
-  const regionCoords = {
-    bulawayo: { lat: -20.1667, lng: 28.5833 },
-    amazon: { lat: -3.4653, lng: -62.2159 },
-    congo: { lat: -0.2280, lng: 18.8361 },
-    borneo: { lat: 1.5533, lng: 110.3592 }
-  };
-
-  const coords = regionCoords[selectedRegion];
-  
   const filteredAlerts = alerts.filter(alert => {
     if (severityFilter === 'all') return true;
     return alert.severity === severityFilter;
   });
 
-  const handleMarkerClick = (alert: any) => {
-    navigate(`/case/${alert.id}`);
-  };
+  // (Navigation retained for other pages; map markers are rendered server-side in the iframe.)
 
   return (
     <div className="space-y-6">
@@ -82,6 +323,19 @@ const MapViewPage: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center space-x-3">
+          <div className="px-3 py-2 rounded-lg border bg-white text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">ML</span>
+              {mlStatus?.model_loaded ? (
+                <span className="text-emerald-700">Online</span>
+              ) : (
+                <span className="text-amber-700">Offline</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500">
+              {mlStatus?.model_type || (mlStatusError ? mlStatusError : 'Checking...')}
+            </div>
+          </div>
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
@@ -93,6 +347,13 @@ const MapViewPage: React.FC = () => {
           >
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span>{isRefreshing ? 'Refreshing...' : 'Refresh Map'}</span>
+          </button>
+          <button
+            onClick={fetchMlStatus}
+            className="px-4 py-2 rounded-lg transition-colors bg-white border border-gray-300 text-gray-700 hover:bg-gray-50"
+            title="Refresh ML status"
+          >
+            ML Status
           </button>
           <select
             value={severityFilter}
@@ -106,6 +367,490 @@ const MapViewPage: React.FC = () => {
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="bg-white rounded-lg shadow-sm p-4">
+        <div className="flex items-center space-x-4">
+          <Search className="h-5 w-5 text-gray-400" />
+          <div className="flex-1 flex items-center space-x-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+              placeholder="Search forest name or location (e.g., Zambezi Valley, Matabeleland, Hwange...)"
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+            />
+            <button
+              onClick={handleSearch}
+              className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center space-x-2"
+            >
+              <Search className="h-4 w-4" />
+              <span>Search</span>
+            </button>
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setSearchResults([]);
+                  setSelectedLocation(null);
+                  setMapKey(prev => prev + 1);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+        {(searchResults.length > 0 || selectedLocation) && (
+          <div className="mt-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-blue-800 font-medium">
+                  📍 {searchResults.length > 0 
+                    ? `Found ${searchResults.length} detection(s) in ${selectedLocation?.name || searchQuery}`
+                    : `Viewing ${selectedLocation?.name || searchQuery}`
+                  }
+                </p>
+                {selectedLocation && (
+                  <p className="text-xs text-blue-600 mt-1">
+                    Center: {selectedLocation.center.lat.toFixed(4)}, {selectedLocation.center.lng.toFixed(4)}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={handleStartMonitoring}
+                disabled={isMonitoring || !selectedLocation}
+                className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+                  isMonitoring || !selectedLocation
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+              >
+                <Eye className="h-4 w-4" />
+                <span>{isMonitoring ? 'Starting...' : '🛰️ Start Monitoring'}</span>
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-blue-700">
+              💡 Click "Start Monitoring" to track this area for deforestation changes every 5 days
+            </div>
+            <div className="mt-3">
+              <button
+                onClick={runGridScan}
+                disabled={gridScanRunning || !selectedLocation || !beforeDate || !afterDate}
+                className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+                  gridScanRunning || !selectedLocation || !beforeDate || !afterDate
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-purple-600 text-white hover:bg-purple-700'
+                }`}
+              >
+                {gridScanRunning && (
+                  <svg className="animate-spin h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                )}
+                <span>{gridScanRunning ? 'Scanning Grid... (may take several minutes)' : '🗺️ Scan Area for Deforestation (Grid Analysis)'}</span>
+              </button>
+              <p className="text-xs text-gray-600 mt-1">
+                Divides the area into a 3x3 grid and detects deforestation in each cell
+              </p>
+              {gridScanRunning && (
+                <div className="mt-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <div className="animate-pulse h-2 w-2 bg-purple-500 rounded-full"></div>
+                    <span className="text-sm font-medium text-purple-800">Analyzing area...</span>
+                  </div>
+                  <div className="text-xs text-purple-700 space-y-1">
+                    <div>✓ Dividing area into 3×3 grid (9 cells)</div>
+                    <div>✓ Downloading Sentinel-2 satellite imagery</div>
+                    <div>✓ Running ML analysis on each cell</div>
+                    <div className="animate-pulse">⏳ Please wait 2-5 minutes...</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Grid Scan Results */}
+      {gridScanResult && (
+        <div className="bg-white rounded-lg shadow-sm p-4">
+          <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 Grid Scan Results: {gridScanResult.location_name}</h2>
+          <div className="mb-3 flex items-center space-x-4 text-sm">
+            <span className="text-gray-700">Total Cells: {gridScanResult.total_cells}</span>
+            <span className="text-red-600 font-semibold">⚠️ Deforested: {gridScanResult.deforested_cells}</span>
+            <span className="text-emerald-600">✓ Stable: {gridScanResult.total_cells - gridScanResult.deforested_cells}</span>
+          </div>
+          {gridScanError && <div className="text-red-700 text-sm mb-3">{gridScanError}</div>}
+          <div className="grid grid-cols-3 gap-2">
+            {gridScanResult.cells.map((cell: any) => (
+              <div
+                key={cell.id}
+                onClick={() => {
+                  console.log('Selected cell:', cell);
+                  console.log('Has before_image_file?', !!cell.before_image_file);
+                  console.log('Has after_image_file?', !!cell.after_image_file);
+                  setSelectedCell(cell);
+                  setShowCellImages(true);
+                }}
+                className={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  cell.deforestation_detected
+                    ? 'border-red-500 bg-red-50 hover:bg-red-100'
+                    : 'border-emerald-500 bg-emerald-50 hover:bg-emerald-100'
+                } ${selectedCell?.id === cell.id ? 'ring-2 ring-blue-500' : ''}`}
+              >
+                <div className="text-xs font-semibold mb-1">
+                  {cell.deforestation_detected ? '🚨 Deforestation' : '✅ Stable'}
+                </div>
+                <div className="text-xs text-gray-700">
+                  <div>Lat: {cell.center.lat.toFixed(4)}</div>
+                  <div>Lng: {cell.center.lng.toFixed(4)}</div>
+                  {cell.deforestation_detected && (
+                    <div className="mt-1 text-red-700 font-medium">
+                      Drop: {(cell.forest_drop * 100).toFixed(1)}%
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-xs text-gray-600 italic">
+            💡 Click any cell to view before/after satellite images
+          </div>
+        </div>
+      )}
+
+      {/* Cell Image Viewer Modal */}
+      {selectedCell && showCellImages && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowCellImages(false)}>
+          <div className="bg-white rounded-lg p-6 max-w-5xl w-full m-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="text-xl font-bold">
+                  {selectedCell.deforestation_detected ? '🚨 Deforestation Detected' : '✅ No Deforestation'}
+                </h3>
+                <p className="text-sm text-gray-600">Cell: {selectedCell.id} | Lat: {selectedCell.center.lat.toFixed(4)}, Lng: {selectedCell.center.lng.toFixed(4)}</p>
+              </div>
+              <button
+                onClick={() => setShowCellImages(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="mb-4 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="font-medium">Before Forest:</span> {(selectedCell.before_forest_probability * 100).toFixed(1)}%
+              </div>
+              <div>
+                <span className="font-medium">After Forest:</span> {(selectedCell.after_forest_probability * 100).toFixed(1)}%
+              </div>
+              <div>
+                <span className="font-medium">Forest Drop:</span> {(selectedCell.forest_drop * 100).toFixed(1)}%
+              </div>
+              <div>
+                <span className="font-medium">NDVI Drop:</span> {selectedCell.ndvi_drop.toFixed(3)}
+              </div>
+            </div>
+
+            <div className="flex gap-2 items-center mb-3">
+              <label htmlFor="cell-viz" className="text-sm font-medium text-gray-700">Visualization:</label>
+              <select
+                id="cell-viz"
+                value={imageVisualization}
+                onChange={(e) => setImageVisualization(e.target.value as 'rgb' | 'nir' | 'ndvi')}
+                className="text-sm px-2 py-1 border border-gray-300 rounded"
+              >
+                <option value="rgb">True Color (RGB)</option>
+                <option value="nir">False Color (NIR)</option>
+                <option value="ndvi">NDVI (Vegetation)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm font-semibold text-gray-700 mb-2">Before ({gridScanResult?.scan_dates?.before})</div>
+                {selectedCell?.before_image_file ? (
+                  <div className="relative group">
+                    <img
+                      src={apiUrl(`/api/ml/preview-geotiff/${selectedCell.before_image_file}?band_combo=${imageVisualization}`)}
+                      alt="Before satellite view"
+                      className="w-full rounded border border-gray-300 cursor-zoom-in"
+                      onClick={() => {
+                        setZoomedImage(apiUrl(`/api/ml/preview-geotiff/${selectedCell.before_image_file}?band_combo=${imageVisualization}`));
+                        setImageZoom(1);
+                      }}
+                      onLoad={() => console.log('✅ Before image loaded successfully')}
+                      onError={(e) => {
+                        console.error('❌ Failed to load before image:', apiUrl(`/api/ml/preview-geotiff/${selectedCell.before_image_file}?band_combo=${imageVisualization}`));
+                        const img = e.target as HTMLImageElement;
+                        img.style.display = 'none';
+                        const parent = img.parentElement;
+                        if (parent && !parent.querySelector('.bg-red-50')) {
+                          const errorDiv = document.createElement('div');
+                          errorDiv.className = 'bg-red-50 rounded p-4 text-center text-sm text-red-600';
+                          errorDiv.textContent = `Image failed: ${selectedCell.before_image_file}`;
+                          parent.appendChild(errorDiv);
+                        }
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded">
+                      <span className="text-white text-sm bg-black bg-opacity-50 px-3 py-1 rounded">🔍 Click to zoom</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gray-100 rounded p-8 text-center text-sm text-gray-500">
+                    Before image not available (filename: {selectedCell?.before_image_file || 'null'})
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-gray-700 mb-2">After ({gridScanResult?.scan_dates?.after})</div>
+                {selectedCell?.after_image_file ? (
+                  <div className="relative group">
+                    <img
+                      src={apiUrl(`/api/ml/preview-geotiff/${selectedCell.after_image_file}?band_combo=${imageVisualization}`)}
+                      alt="After satellite view"
+                      className="w-full rounded border border-gray-300 cursor-zoom-in"
+                      onClick={() => {
+                        setZoomedImage(apiUrl(`/api/ml/preview-geotiff/${selectedCell.after_image_file}?band_combo=${imageVisualization}`));
+                        setImageZoom(1);
+                      }}
+                      onLoad={() => console.log('✅ After image loaded successfully')}
+                      onError={(e) => {
+                        console.error('❌ Failed to load after image:', apiUrl(`/api/ml/preview-geotiff/${selectedCell.after_image_file}?band_combo=${imageVisualization}`));
+                        const img = e.target as HTMLImageElement;
+                        img.style.display = 'none';
+                        const parent = img.parentElement;
+                        if (parent && !parent.querySelector('.bg-red-50')) {
+                          const errorDiv = document.createElement('div');
+                          errorDiv.className = 'bg-red-50 rounded p-4 text-center text-sm text-red-600';
+                          errorDiv.textContent = `Image failed: ${selectedCell.after_image_file}`;
+                          parent.appendChild(errorDiv);
+                        }
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded">
+                      <span className="text-white text-sm bg-black bg-opacity-50 px-3 py-1 rounded">🔍 Click to zoom</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gray-100 rounded p-8 text-center text-sm text-gray-500">
+                    After image not available (filename: {selectedCell?.after_image_file || 'null'})
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 text-xs text-gray-500 italic">
+              💡 RGB shows true color, NIR highlights vegetation in red, NDVI shows vegetation health in green
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gridScanError && (
+        <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+          <p className="text-red-700 text-sm">{gridScanError}</p>
+        </div>
+      )}
+
+      {/* ML Auto Change Detection */}
+      <div className="bg-white rounded-lg shadow-sm p-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">ML Change Detection (Auto)</h2>
+            <p className="text-sm text-gray-600">Uses GEE to fetch Sentinel-2 10-band imagery automatically.</p>
+            <p className="text-xs text-amber-700 mt-1">⚠️ Compare same-season images (e.g., Jan→Jan) to avoid false positives from seasonal vegetation changes.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={runMlAutoChangeDetection}
+              disabled={mlAutoRunning}
+              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                mlAutoRunning ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
+            >
+              {mlAutoRunning && (
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
+              <span>{mlAutoRunning ? 'Running… (may take a minute)' : 'Run ML Change Detection'}</span>
+            </button>
+          </div>
+        </div>
+
+        {mlAutoRunning && (
+          <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+            <div className="flex items-center space-x-2 mb-2">
+              <div className="animate-pulse h-2 w-2 bg-indigo-500 rounded-full"></div>
+              <span className="text-sm font-medium text-indigo-800">Processing detection...</span>
+            </div>
+            <div className="text-xs text-indigo-700 space-y-1">
+              <div>🛰️ Downloading Sentinel-2 imagery from Google Earth Engine</div>
+              <div>🤖 Running BigEarthNet ResNet-50 ML model</div>
+              <div className="animate-pulse">⏳ Estimated time: 30-60 seconds</div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="ml-before-date" className="block text-xs text-gray-600 mb-1">Before date</label>
+            <input
+              id="ml-before-date"
+              type="date"
+              value={beforeDate}
+              onChange={(e) => setBeforeDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label htmlFor="ml-after-date" className="block text-xs text-gray-600 mb-1">After date</label>
+            <input
+              id="ml-after-date"
+              type="date"
+              value={afterDate}
+              onChange={(e) => setAfterDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="mt-3 text-sm">
+          <div className="text-gray-700">
+            <span className="font-medium">Target:</span>{' '}
+            {selectedLocation?.name ? selectedLocation.name : 'No location selected'}
+          </div>
+          {mlAutoError && <div className="mt-2 text-red-700">{mlAutoError}</div>}
+          {seasonalWarning && (
+            <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-300">
+              <p className="text-xs text-amber-800">
+                <strong>⚠️ Seasonal Warning:</strong> {seasonalWarning}
+              </p>
+            </div>
+          )}
+          {mlAutoResult && (
+            <div className="mt-3 p-3 rounded-lg border bg-gray-50">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="font-medium text-gray-900">Result</div>
+                <div className={`text-sm font-semibold ${mlAutoResult?.deforestation_detected ? 'text-red-700' : 'text-emerald-700'}`}>
+                  {mlAutoResult?.deforestation_detected ? 'Deforestation detected' : 'No deforestation detected'}
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div>Forest drop: {mlAutoResult?.change?.forest_drop?.toFixed?.(3) ?? mlAutoResult?.change?.forest_drop}</div>
+                <div>NDVI drop: {mlAutoResult?.change?.ndvi_drop?.toFixed?.(3) ?? mlAutoResult?.change?.ndvi_drop}</div>
+                <div>Before forest: {mlAutoResult?.before?.forest_probability?.toFixed?.(3) ?? mlAutoResult?.before?.forest_probability}</div>
+                <div>After forest: {mlAutoResult?.after?.forest_probability?.toFixed?.(3) ?? mlAutoResult?.after?.forest_probability}</div>
+              </div>
+
+              {detectionMapUrl && (
+                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded flex items-center justify-between">
+                  <span className="text-xs text-blue-800">
+                    📍 Detection marked on map
+                  </span>
+                  <button
+                    onClick={() => {
+                      setDetectionMapUrl(null);
+                      setMapKey(prev => prev + 1);
+                    }}
+                    className="text-xs px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 transition-colors"
+                  >
+                    Clear marker
+                  </button>
+                </div>
+              )}
+              
+              {mlAutoResult?.exports && (
+                <div className="mt-3">
+                  <button
+                    onClick={() => setShowBeforeAfterImages(!showBeforeAfterImages)}
+                    className="text-sm text-blue-600 hover:text-blue-800 underline"
+                  >
+                    {showBeforeAfterImages ? '▼ Hide' : '▶ View'} Before/After Satellite Images
+                  </button>
+                  
+                  {showBeforeAfterImages && (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex gap-2 items-center">
+                        <label htmlFor="image-viz" className="text-xs font-medium text-gray-700">Visualization:</label>
+                        <select
+                          id="image-viz"
+                          value={imageVisualization}
+                          onChange={(e) => setImageVisualization(e.target.value as 'rgb' | 'nir' | 'ndvi')}
+                          className="text-xs px-2 py-1 border border-gray-300 rounded"
+                        >
+                          <option value="rgb">True Color (RGB)</option>
+                          <option value="nir">False Color (NIR)</option>
+                          <option value="ndvi">NDVI (Vegetation)</option>
+                        </select>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700 mb-1">Before ({mlAutoResult.before.date})</div>
+                          <div className="relative group">
+                            <img
+                              src={apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.before.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`)}
+                              alt="Before image"
+                              className="w-full h-auto border border-gray-300 rounded cursor-zoom-in"
+                              onClick={() => {
+                                setZoomedImage(apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.before.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`));
+                                setImageZoom(1);
+                              }}
+                              onLoad={() => console.log('✅ Main ML before image loaded')}
+                              onError={(e) => {
+                                console.error('❌ Main ML before image failed:', apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.before.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`));
+                                e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200"%3E%3Crect fill="%23ddd" width="200" height="200"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="%23666" font-size="14"%3EImage unavailable%3C/text%3E%3C/svg%3E';
+                              }}
+                            />
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded">
+                              <span className="text-white text-sm bg-black bg-opacity-50 px-3 py-1 rounded">🔍 Click to zoom</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700 mb-1">After ({mlAutoResult.after.date})</div>
+                          <div className="relative group">
+                            <img
+                              src={apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.after.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`)}
+                              alt="After image"
+                              className="w-full h-auto border border-gray-300 rounded cursor-zoom-in"
+                              onClick={() => {
+                                setZoomedImage(apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.after.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`));
+                                setImageZoom(1);
+                              }}
+                              onLoad={() => console.log('✅ Main ML after image loaded')}
+                              onError={(e) => {
+                                console.error('❌ Main ML after image failed:', apiUrl(`/api/ml/preview-geotiff/${mlAutoResult.exports.after.path.split(/[/\\]/).pop()}?band_combo=${imageVisualization}`));
+                                e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200"%3E%3Crect fill="%23ddd" width="200" height="200"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="%23666" font-size="14"%3EImage unavailable%3C/text%3E%3C/svg%3E';
+                              }}
+                            />
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded">
+                              <span className="text-white text-sm bg-black bg-opacity-50 px-3 py-1 rounded">🔍 Click to zoom</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="text-xs text-gray-500 italic">
+                        💡 RGB shows true color, NIR highlights vegetation in red, NDVI shows vegetation health in green
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -190,13 +935,38 @@ const MapViewPage: React.FC = () => {
 
       {/* Backend Map Integration */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-2 p-4">Deforestation Map with NDVI Layers</h2>
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-lg font-semibold text-gray-900">Deforestation Map with NDVI Layers</h2>
+          {mapError && (
+            <button
+              onClick={() => { setMapError(false); setMapKey(prev => prev + 1); }}
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Try API Map
+            </button>
+          )}
+          {!mapError && (
+            <button
+              onClick={() => { setMapError(true); setMapKey(prev => prev + 1); }}
+              className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
+            >
+              Use Static Map
+            </button>
+          )}
+        </div>
+        {mapError && (
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mx-4 mt-4">
+            <p className="text-sm text-yellow-700">
+              ℹ️ Showing static map. The API server may be offline. Start it with: <code>cd backend; python start_api.py</code>
+            </p>
+          </div>
+        )}
         <iframe
           key={mapKey}
           src={backendMapUrl}
           title="Deforestation Map"
-          className="w-full"
-          style={{ height: '600px', border: 'none' }}
+          className="w-full h-[600px] border-0"
+          onError={() => setMapError(true)}
         />
         {/* Map Controls integrated with backend map */}
         <div className="bg-gray-50 border-b border-gray-200 p-4">
@@ -250,6 +1020,85 @@ const MapViewPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Image Zoom Modal */}
+      {zoomedImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center"
+          onClick={() => setZoomedImage(null)}
+        >
+          <div className="relative w-full h-full flex flex-col items-center justify-center p-8">
+            {/* Close Button */}
+            <button
+              onClick={() => setZoomedImage(null)}
+              className="absolute top-4 right-4 bg-white text-gray-800 rounded-full w-10 h-10 flex items-center justify-center hover:bg-gray-200 transition-colors z-10"
+              title="Close (ESC)"
+            >
+              ✕
+            </button>
+
+            {/* Zoom Controls */}
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-lg p-2 flex items-center space-x-2 z-10">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setImageZoom(Math.max(0.5, imageZoom - 0.25));
+                }}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                title="Zoom out"
+              >
+                −
+              </button>
+              <span className="text-sm font-medium px-2 min-w-[60px] text-center">
+                {Math.round(imageZoom * 100)}%
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setImageZoom(Math.min(5, imageZoom + 0.25));
+                }}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                title="Zoom in"
+              >
+                +
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setImageZoom(1);
+                }}
+                className="px-3 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded transition-colors ml-2"
+                title="Reset zoom"
+              >
+                Reset
+              </button>
+            </div>
+
+            {/* Image Container with Pan Support */}
+            <div 
+              className="overflow-auto max-w-full max-h-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={zoomedImage}
+                alt="Zoomed satellite image"
+                className="transition-transform duration-200"
+                style={{
+                  transform: `scale(${imageZoom})`,
+                  transformOrigin: 'center center',
+                  cursor: imageZoom > 1 ? 'move' : 'default'
+                }}
+                draggable={false}
+              />
+            </div>
+
+            {/* Instructions */}
+            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-75 text-white text-sm px-4 py-2 rounded-lg">
+              Use +/− buttons to zoom • Click outside to close
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
