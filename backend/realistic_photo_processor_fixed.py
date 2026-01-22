@@ -153,8 +153,29 @@ class RealisticPhotoProcessor:
             m = folium.Map(
                 location=[center_lat, center_lon],
                 zoom_start=12,
-                tiles='OpenStreetMap'
+                tiles='OpenStreetMap',
+                zoom_control=True
             )
+            
+            # Enable scroll wheel zoom
+            m.get_root().html.add_child(folium.Element("""
+            <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    setTimeout(function() {
+                        var maps = document.querySelectorAll('.folium-map');
+                        maps.forEach(function(mapDiv) {
+                            if (mapDiv._leaflet_id) {
+                                var map = mapDiv._leaflet;
+                                if (map) {
+                                    map.scrollWheelZoom.enable();
+                                    map.doubleClickZoom.enable();
+                                }
+                            }
+                        });
+                    }, 100);
+                });
+            </script>
+            """))
             
             # Add markers for each location with realistic photos
             for img_data in available_images:

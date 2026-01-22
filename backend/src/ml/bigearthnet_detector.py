@@ -187,10 +187,26 @@ class BigEarthNetForestChangeDetector:
         denom = (nir + red) + 1e-6
         ndvi = (nir - red) / denom
         return float(np.nanmean(ndvi))
+    
+    def _greenness_score(self, bands10: np.ndarray) -> float:
+        """
+        Calculate greenness using Green band intensity relative to Red/Blue.
+        Higher green = more vegetation. This is a visual indicator.
+        """
+        # B02=Blue, B03=Green, B04=Red
+        blue = bands10[0]
+        green = bands10[1]
+        red = bands10[2]
+        
+        # Greenness: high green relative to red and blue
+        # Normalized green index
+        green_dominance = green / (red + blue + 1e-6)
+        return float(np.nanmean(green_dominance))
 
     def predict_from_file(self, image_path: str) -> Dict:
         bands10, bbox = self._read_multiband(image_path)
         ndvi_mean = self._ndvi_mean(bands10)
+        greenness = self._greenness_score(bands10)
         x = self._to_tensor_224(bands10)
 
         with torch.no_grad():
@@ -206,7 +222,7 @@ class BigEarthNetForestChangeDetector:
             class_probabilities=class_probs,
             timestamp=datetime.now().isoformat(),
             bbox_wgs84=bbox,
-        ).__dict__
+        ).__dict__ | {"greenness_score": greenness}
 
     def detect_change_from_files(
         self,
@@ -218,17 +234,56 @@ class BigEarthNetForestChangeDetector:
         before = self.predict_from_file(before_image)
         after = self.predict_from_file(after_image)
 
+        # Calculate raw differences (probabilities are 0-1)
         forest_drop = float(before["forest_probability"] - after["forest_probability"])
+        forest_drop_percent = forest_drop * 100.0  # Convert to percentage
+        
+        # Calculate forest cover percentages
+        forest_cover_before_percent = before["forest_probability"] * 100.0
+        forest_cover_after_percent = after["forest_probability"] * 100.0
+        
+        # Calculate relative forest loss (as percentage of original forest)
+        if before["forest_probability"] > 0.01:  # Avoid division by zero
+            forest_loss_relative = (forest_drop / before["forest_probability"]) * 100.0
+        else:
+            forest_loss_relative = 0.0
+        
         ndvi_drop = None
+        ndvi_increase = 0.0
+        greenness_increase = 0.0
+        
         if before.get("ndvi_mean") is not None and after.get("ndvi_mean") is not None:
             ndvi_drop = float(before["ndvi_mean"] - after["ndvi_mean"])
+            ndvi_increase = float(after["ndvi_mean"] - before["ndvi_mean"])
+        
+        if before.get("greenness_score") is not None and after.get("greenness_score") is not None:
+            greenness_increase = float(after["greenness_score"] - before["greenness_score"])
 
-        deforestation_detected = (
-            before["forest_probability"] >= self.min_forest_before
-            and after["forest_probability"] <= self.max_forest_after
-            and forest_drop >= self.forest_drop_threshold
-            and (ndvi_drop is None or ndvi_drop >= self.ndvi_drop_threshold)
-        )
+        # CRITICAL FIX: Visual RGB greenness is more reliable than ML model for Zimbabwe
+        # BigEarthNet was trained on European forests, not African savannas
+        visual_shows_growth = greenness_increase > 0.05  # 5% more green in RGB
+        ndvi_shows_growth = ndvi_increase > 0.05  # 5% NDVI increase
+        ndvi_shows_decline = ndvi_drop > 0.1  # 10% NDVI drop
+        
+        # Priority: Visual evidence > NDVI > ML model
+        if visual_shows_growth or ndvi_shows_growth:
+            # Visual/NDVI evidence shows INCREASE in vegetation - NOT deforestation
+            deforestation_detected = False
+            logger.info(f"Vegetation GROWTH detected (greenness: +{greenness_increase:.3f}, NDVI: +{ndvi_increase:.3f}) - overriding ML model")
+        elif ndvi_shows_decline:
+            # NDVI confirms vegetation loss
+            deforestation_detected = (
+                ndvi_drop >= self.ndvi_drop_threshold
+                or forest_drop >= self.forest_drop_threshold
+            )
+            logger.info(f"NDVI dropped by {ndvi_drop:.3f} - potential deforestation")
+        else:
+            # Small changes - use ML model but be conservative
+            deforestation_detected = (
+                before["forest_probability"] >= self.min_forest_before
+                and after["forest_probability"] <= self.max_forest_after
+                and forest_drop >= self.forest_drop_threshold
+            )
 
         return {
             "status": "success",
@@ -236,18 +291,36 @@ class BigEarthNetForestChangeDetector:
             "before": {
                 "date": before_date,
                 "forest_probability": before["forest_probability"],
+                "forest_cover_percent": forest_cover_before_percent,
                 "ndvi_mean": before.get("ndvi_mean"),
+                "greenness_score": before.get("greenness_score"),
                 "bbox_wgs84": before.get("bbox_wgs84"),
             },
             "after": {
                 "date": after_date,
                 "forest_probability": after["forest_probability"],
+                "forest_cover_percent": forest_cover_after_percent,
                 "ndvi_mean": after.get("ndvi_mean"),
+                "greenness_score": after.get("greenness_score"),
                 "bbox_wgs84": after.get("bbox_wgs84"),
             },
             "change": {
                 "forest_drop": forest_drop,
+                "forest_drop_percent": forest_drop_percent,
+                "forest_loss_percent": forest_loss_relative,
                 "ndvi_drop": ndvi_drop,
+                "ndvi_increase": ndvi_increase,
+                "greenness_increase": greenness_increase,
+                "vegetation_trend": (
+                    "growth" if (visual_shows_growth or ndvi_shows_growth) 
+                    else ("decline" if ndvi_shows_decline else "stable")
+                ),
+                "interpretation": (
+                    f"Visual/NDVI analysis shows vegetation GROWTH (greenness: +{greenness_increase:.3f}, NDVI: +{ndvi_increase:.3f}) - NOT deforestation" 
+                    if (visual_shows_growth or ndvi_shows_growth)
+                    else f"NDVI decreased by {ndvi_drop:.3f} - possible deforestation" if ndvi_shows_decline
+                    else "Minimal vegetation change detected"
+                ),
                 "thresholds": {
                     "forest_drop_threshold": self.forest_drop_threshold,
                     "min_forest_before": self.min_forest_before,
@@ -260,6 +333,7 @@ class BigEarthNetForestChangeDetector:
                 "repo_id": BIGEARTHNET_REPO_ID,
                 "bands_required": ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12"],
                 "forest_classes": list(FOREST_CLASS_NAMES),
+                "note": "Visual RGB + NDVI corrected for Zimbabwe (model trained on European landscapes)",
             },
             "timestamp": datetime.now().isoformat(),
         }

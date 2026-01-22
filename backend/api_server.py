@@ -4,7 +4,7 @@ Exposes endpoints for deforestation map data and realistic satellite images
 Includes ML-powered deforestation detection
 """
 
-from fastapi import FastAPI, Response, Query
+from fastapi import FastAPI, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
@@ -12,6 +12,12 @@ import json
 import folium
 from folium.plugins import MarkerCluster
 import logging
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+import time
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +39,9 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).parent
 MAPS_DIR = BACKEND_DIR / "deforestation_maps"
 IMAGES_DIR = MAPS_DIR / "images" / "realistic"
+
+# Initialize geocoder for location search
+geolocator = Nominatim(user_agent="deforestation_detector_zimbabwe", timeout=10)
 
 
 @app.on_event("startup")
@@ -217,9 +226,9 @@ def preview_geotiff(filename: str, band_combo: str = Query("rgb", enum=["rgb", "
             # Create PIL Image with alpha channel
             img = Image.fromarray(img_array, mode='RGBA')
             
-            # Save to bytes buffer
+            # Save to bytes buffer with maximum quality
             buf = io.BytesIO()
-            img.save(buf, format='PNG')
+            img.save(buf, format='PNG', optimize=False, compress_level=1)  # Lower compression = better quality
             buf.seek(0)
             
             return Response(content=buf.getvalue(), media_type="image/png")
@@ -330,8 +339,29 @@ def get_map_with_all_detections(
     m = folium.Map(
         location=[map_center_lat, map_center_lon],
         zoom_start=map_zoom,
-        tiles='OpenStreetMap'
+        tiles='OpenStreetMap',
+        zoom_control=True
     )
+    
+    # Enable scroll wheel zoom via custom JavaScript
+    m.get_root().html.add_child(folium.Element("""
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                var maps = document.querySelectorAll('.folium-map');
+                maps.forEach(function(mapDiv) {
+                    if (mapDiv._leaflet_id) {
+                        var map = mapDiv._leaflet;
+                        if (map) {
+                            map.scrollWheelZoom.enable();
+                            map.doubleClickZoom.enable();
+                        }
+                    }
+                });
+            }, 100);
+        });
+    </script>
+    """))
     
     # Add satellite layer
     folium.TileLayer(
@@ -544,8 +574,29 @@ async def get_map_with_ml_detection():
     m = folium.Map(
         location=[detection_lat, detection_lng],
         zoom_start=zoom_level,
-        tiles='OpenStreetMap'
+        tiles='OpenStreetMap',
+        zoom_control=True
     )
+    
+    # Enable scroll wheel zoom
+    m.get_root().html.add_child(folium.Element("""
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                var maps = document.querySelectorAll('.folium-map');
+                maps.forEach(function(mapDiv) {
+                    if (mapDiv._leaflet_id) {
+                        var map = mapDiv._leaflet;
+                        if (map) {
+                            map.scrollWheelZoom.enable();
+                            map.doubleClickZoom.enable();
+                        }
+                    }
+                });
+            }, 100);
+        });
+    </script>
+    """))
     
     # Add satellite layer
     folium.TileLayer(
@@ -768,8 +819,29 @@ def get_detection_map(limit: int = Query(50, description="Number of markers to s
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=11,
-        tiles='OpenStreetMap'
+        tiles='OpenStreetMap',
+        zoom_control=True
     )
+    
+    # Enable scroll wheel zoom
+    m.get_root().html.add_child(folium.Element("""
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                var maps = document.querySelectorAll('.folium-map');
+                maps.forEach(function(mapDiv) {
+                    if (mapDiv._leaflet_id) {
+                        var map = mapDiv._leaflet;
+                        if (map) {
+                            map.scrollWheelZoom.enable();
+                            map.doubleClickZoom.enable();
+                        }
+                    }
+                });
+            }, 100);
+        });
+    </script>
+    """))
     
     # Add satellite layer
     folium.TileLayer(
@@ -853,108 +925,6 @@ def get_report():
         return JSONResponse(report)
     return JSONResponse({"error": "Report not found"}, status_code=404)
 
-@app.get("/api/search/location")
-def search_location(query: str = Query(..., description="Search query for forest/location name")):
-    """
-    Search for deforestation detections by forest/location name.
-    Returns coordinates matching the search query.
-    """
-    try:
-        # Known forest/region names in Zimbabwe with approximate bounding boxes
-        zimbabwe_regions = {
-            "hwange": {
-                "name": "Hwange National Park", 
-                "bounds": {"min_lat": -19.5, "max_lat": -18.0, "min_lng": 25.5, "max_lng": 27.5},
-                "center": {"lat": -18.75, "lng": 26.5}
-            },
-            "zambezi": {
-                "name": "Zambezi Valley", 
-                "bounds": {"min_lat": -17.5, "max_lat": -15.5, "min_lng": 28.0, "max_lng": 33.0},
-                "center": {"lat": -16.5, "lng": 30.5}
-            },
-            "matabeleland": {
-                "name": "Matabeleland", 
-                "bounds": {"min_lat": -22.0, "max_lat": -17.0, "min_lng": 26.0, "max_lng": 30.0},
-                "center": {"lat": -19.5, "lng": 28.0}
-            },
-            "gonarezhou": {
-                "name": "Gonarezhou National Park", 
-                "bounds": {"min_lat": -21.8, "max_lat": -20.8, "min_lng": 31.0, "max_lng": 32.5},
-                "center": {"lat": -21.3, "lng": 31.75}
-            },
-            "mana pools": {
-                "name": "Mana Pools", 
-                "bounds": {"min_lat": -16.0, "max_lat": -15.5, "min_lng": 29.0, "max_lng": 30.0},
-                "center": {"lat": -15.75, "lng": 29.5}
-            },
-            "matobo": {
-                "name": "Matobo Hills", 
-                "bounds": {"min_lat": -20.7, "max_lat": -20.3, "min_lng": 28.3, "max_lng": 28.8},
-                "center": {"lat": -20.5, "lng": 28.55}
-            },
-            "chimanimani": {
-                "name": "Chimanimani", 
-                "bounds": {"min_lat": -20.0, "max_lat": -19.5, "min_lng": 32.5, "max_lng": 33.0},
-                "center": {"lat": -19.75, "lng": 32.75}
-            },
-            "eastern highlands": {
-                "name": "Eastern Highlands", 
-                "bounds": {"min_lat": -20.0, "max_lat": -17.5, "min_lng": 32.0, "max_lng": 33.5},
-                "center": {"lat": -18.75, "lng": 32.75}
-            },
-        }
-        
-        # Load detection coordinates
-        coords_file = MAPS_DIR / "deforestation_coordinates.json"
-        if not coords_file.exists():
-            return JSONResponse({"results": [], "message": "No detection data available"})
-        
-        with open(coords_file, "r") as f:
-            all_coords = json.load(f)
-        
-        # Search for matching region
-        query_lower = query.lower()
-        matching_coords = []
-        matched_region = None
-        location_info = None
-        
-        for key, region in zimbabwe_regions.items():
-            if query_lower in key or query_lower in region["name"].lower():
-                matched_region = region["name"]
-                location_info = {
-                    "name": region["name"],
-                    "bounds": region["bounds"],
-                    "center": region["center"]
-                }
-                bounds = region["bounds"]
-                
-                # Filter coordinates within this region
-                for coord in all_coords:
-                    lat = coord["latitude"]
-                    lng = coord["longitude"]
-                    if (bounds["min_lat"] <= lat <= bounds["max_lat"] and 
-                        bounds["min_lng"] <= lng <= bounds["max_lng"]):
-                        matching_coords.append(coord)
-                break
-        
-        if not matched_region:
-            return JSONResponse({
-                "results": [],
-                "location": None,
-                "message": f"No region found matching '{query}'. Try: Hwange, Zambezi Valley, Matabeleland, Gonarezhou, Mana Pools, Matobo, Chimanimani, or Eastern Highlands"
-            })
-        
-        return JSONResponse({
-            "results": matching_coords[:100],  # Limit to 100 results
-            "total": len(matching_coords),
-            "region": matched_region,
-            "location": location_info,
-            "message": f"Found {len(matching_coords)} detections in {matched_region}"
-        })
-        
-    except Exception as e:
-        return JSONResponse({"error": str(e), "results": [], "location": None}, status_code=500)
-
 @app.post("/api/monitoring/start")
 async def start_monitoring(request: dict):
     """
@@ -1002,6 +972,164 @@ async def start_monitoring(request: dict):
         })
     except Exception as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@app.get("/api/search/location")
+def search_location(
+    query: str = Query(..., description="Place name, address, or coordinates to search"),
+    country: str = Query("Zimbabwe", description="Country to limit search (default: Zimbabwe)")
+):
+    """
+    Search for any location using free-form text query.
+    Examples:
+    - "Harare" - search for a city
+    - "Mana Pools National Park" - search for a specific place
+    - "Victoria Falls" - tourist location
+    - "-17.8252, 31.0335" - coordinates
+    - "Mutare, Manicaland" - city with province
+    """
+    try:
+        # Add country to query for better results if not already specified
+        search_query = query
+        if country and country.lower() not in query.lower():
+            search_query = f"{query}, {country}"
+        
+        logger.info(f"Searching for location: {search_query}")
+        
+        # Attempt geocoding with retry logic
+        max_retries = 3
+        location = None
+        
+        for attempt in range(max_retries):
+            try:
+                location = geolocator.geocode(
+                    search_query, 
+                    addressdetails=True,
+                    language='en',
+                    exactly_one=False,  # Get multiple results
+                    limit=10
+                )
+                break
+            except GeocoderTimedOut:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                raise
+            except GeocoderServiceError as e:
+                logger.error(f"Geocoder service error: {e}")
+                raise
+        
+        if not location:
+            return JSONResponse({
+                "success": False,
+                "message": f"No results found for '{query}'",
+                "suggestions": [
+                    "Try a more specific location name",
+                    "Include province/region (e.g., 'Harare, Zimbabwe')",
+                    "Use coordinates format: latitude, longitude",
+                    "Check spelling of place name"
+                ]
+            }, status_code=404)
+        
+        # Convert to list if single result
+        if not isinstance(location, list):
+            location = [location]
+        
+        # Format results
+        results = []
+        for loc in location[:10]:  # Limit to top 10 results
+            result = {
+                "display_name": loc.address,
+                "latitude": loc.latitude,
+                "longitude": loc.longitude,
+                "type": loc.raw.get('type', 'unknown'),
+                "importance": loc.raw.get('importance', 0),
+                "bbox": loc.raw.get('boundingbox', None),  # [min_lat, max_lat, min_lng, max_lng]
+                "place_id": loc.raw.get('place_id'),
+                "address": loc.raw.get('address', {})
+            }
+            
+            # Calculate reasonable bounds for monitoring (approx 10km x 10km)
+            # This gives roughly 0.09 degrees (~10km at Zimbabwe's latitude)
+            margin = 0.045
+            result["bounds"] = {
+                "min_lat": loc.latitude - margin,
+                "max_lat": loc.latitude + margin,
+                "min_lng": loc.longitude - margin,
+                "max_lng": loc.longitude + margin
+            }
+            
+            results.append(result)
+        
+        logger.info(f"Found {len(results)} results for '{query}'")
+        
+        return JSONResponse({
+            "success": True,
+            "query": query,
+            "count": len(results),
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"Location search error: {e}")
+        return JSONResponse({
+            "success": False,
+            "message": f"Search error: {str(e)}"
+        }, status_code=500)
+
+
+@app.post("/api/analyze/location")
+async def analyze_location(request: Request):
+    """
+    Analyze any location for deforestation on-demand.
+    Accepts location data from search results and triggers ML analysis.
+    """
+    try:
+        data = await request.json()
+        
+        latitude = data.get("latitude")
+        longitude = data.get("longitude")
+        location_name = data.get("name", "Unknown Location")
+        bounds = data.get("bounds")
+        
+        if not latitude or not longitude:
+            return JSONResponse({
+                "success": False,
+                "message": "Latitude and longitude are required"
+            }, status_code=400)
+        
+        logger.info(f"Analyzing location: {location_name} ({latitude}, {longitude})")
+        
+        # Import ML functions
+        from src.ml.api_integration import run_auto_detection
+        
+        # Prepare request data for ML system
+        ml_request = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "location_name": location_name,
+            "bounds": bounds,
+            "analysis_type": "on-demand"
+        }
+        
+        # Run ML detection (reuse existing endpoint logic)
+        # This will download imagery, run detection, and return results
+        result = await run_auto_detection(ml_request)
+        
+        return JSONResponse({
+            "success": True,
+            "location": location_name,
+            "coordinates": {"latitude": latitude, "longitude": longitude},
+            "analysis": result
+        })
+        
+    except Exception as e:
+        logger.error(f"Location analysis error: {e}")
+        return JSONResponse({
+            "success": False,
+            "message": f"Analysis error: {str(e)}"
+        }, status_code=500)
+
 
 # Add more endpoints as needed for processing, status, etc.
 

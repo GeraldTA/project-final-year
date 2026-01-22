@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Zimbabwe Location Search</title>
+    <style>
+        body { font-family: Arial; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { color: #2d5; }
+        .test-item { margin: 15px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background: #e7f5e7; border-color: #2d5; }
+        .error { background: #fee; border-color: #d22; }
+        input { width: 400px; padding: 8px; font-size: 14px; }
+        button { padding: 8px 16px; background: #2d5; color: white; border: none; cursor: pointer; }
+        button:hover { background: #1b3; }
+        #results { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🌍 Zimbabwe Location Search Test</h1>
+    <p>Testing if the search works like Google Maps for ANY Zimbabwe location</p>
+    
+    <div>
+        <input type="text" id="searchInput" placeholder="Enter any Zimbabwe location (e.g., Kadoma, NUST, UZ...)">
+        <button onclick="testSearch()">Search</button>
+    </div>
+    
+    <div id="results"></div>
+    
+    <h2>Quick Tests:</h2>
+    <button onclick="testLocation('Kadoma')">Test: Kadoma</button>
+    <button onclick="testLocation('University of Zimbabwe')">Test: UZ</button>
+    <button onclick="testLocation('NUST')">Test: NUST</button>
+    <button onclick="testLocation('Victoria Falls')">Test: Victoria Falls</button>
+    <button onclick="testLocation('Harare')">Test: Harare</button>
+    
+    <script>
+        async function testLocation(query) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `<p>Searching for: <strong>${query}</strong>...</p>`;
+            
+            try {
+                const response = await fetch(`http://127.0.0.1:8001/api/search/location?query=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    let html = `<div class="test-item success">`;
+                    html += `<h3>✓ Success! Found ${data.count} result(s) for "${query}"</h3>`;
+                    data.results.slice(0, 3).forEach((result, idx) => {
+                        html += `<div style="margin: 10px 0; padding: 10px; background: white; border-radius: 3px;">`;
+                        html += `<strong>${idx + 1}. ${result.display_name}</strong><br>`;
+                        html += `📍 Coordinates: ${result.latitude.toFixed(4)}°, ${result.longitude.toFixed(4)}°<br>`;
+                        html += `🏷️ Type: ${result.type}<br>`;
+                        html += `</div>`;
+                    });
+                    html += `</div>`;
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `<div class="test-item error">`;
+                    resultsDiv.innerHTML += `<h3>✗ Search Failed</h3>`;
+                    resultsDiv.innerHTML += `<p>${data.message || 'Unknown error'}</p>`;
+                    resultsDiv.innerHTML += `</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="test-item error">`;
+                resultsDiv.innerHTML += `<h3>✗ Error</h3>`;
+                resultsDiv.innerHTML += `<p>${error.message}</p>`;
+                resultsDiv.innerHTML += `</div>`;
+            }
+        }
+        
+        function testSearch() {
+            const query = document.getElementById('searchInput').value;
+            if (query.trim()) {
+                testLocation(query);
+            }
+        }
+        
+        document.getElementById('searchInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') testSearch();
+        });
+    </script>
+</body>
+</html>

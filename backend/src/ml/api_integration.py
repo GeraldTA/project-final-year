@@ -547,5 +547,58 @@ async def scan_area_grid(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@ml_router.post("/test-with-cached")
+async def test_with_cached():
+    """
+    Test ML detection using cached imagery files.
+    This demonstrates the ML model works without needing Earth Engine auth.
+    """
+    if detector is None:
+        raise HTTPException(status_code=503, detail="ML model not loaded")
+    
+    try:
+        import glob
+        from pathlib import Path
+        
+        # Get cached files
+        cache_dir = Path("data/raw/gee_exports")
+        tif_files = sorted(cache_dir.glob("s2_10band_*.tif"))
+        
+        if len(tif_files) < 2:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Need at least 2 cached files, found {len(tif_files)}"
+            )
+        
+        # Use first two files
+        before_file = str(tif_files[0])
+        after_file = str(tif_files[1])
+        
+        logger.info(f"Testing with cached files: {before_file}, {after_file}")
+        
+        # Run detection
+        result = detector.detect_change_from_files(
+            before_image=before_file,
+            after_image=after_file,
+            before_date="2024-01-01",
+            after_date="2024-06-01"
+        )
+        
+        # Add file info to response
+        result["test_mode"] = True
+        result["files_used"] = {
+            "before": Path(before_file).name,
+            "after": Path(after_file).name
+        }
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Test detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Export router
 __all__ = ['ml_router', 'initialize_ml_system']

@@ -33,3 +33,26 @@
 * {
   transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
+
+/* High-quality image rendering for satellite images */
+img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  -ms-interpolation-mode: nearest-neighbor;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+}
+
+/* Ensure sharp rendering for zoomed images specifically */
+img[alt*="satellite"],
+img[alt*="Satellite"],
+img[alt*="Before"],
+img[alt*="After"],
+img[alt*="Zoomed"] {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
