@@ -1131,6 +1131,235 @@ async def analyze_location(request: Request):
         }, status_code=500)
 
 
+# ========================================
+# Monitored Areas Management Endpoints
+# ========================================
+
+MONITORED_AREAS_FILE = BACKEND_DIR / "data" / "monitored_areas.json"
+
+def load_monitored_areas():
+    """Load monitored areas from JSON file"""
+    try:
+        if MONITORED_AREAS_FILE.exists():
+            with open(MONITORED_AREAS_FILE, 'r') as f:
+                return json.load(f)
+        return {"areas": []}
+    except Exception as e:
+        logger.error(f"Error loading monitored areas: {e}")
+        return {"areas": []}
+
+def save_monitored_areas(data):
+    """Save monitored areas to JSON file"""
+    try:
+        MONITORED_AREAS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(MONITORED_AREAS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving monitored areas: {e}")
+        return False
+
+@app.get("/api/monitored-areas")
+async def get_monitored_areas():
+    """Get all monitored areas"""
+    try:
+        areas_data = load_monitored_areas()
+        return JSONResponse(areas_data)
+    except Exception as e:
+        logger.error(f"Error getting monitored areas: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/monitored-areas")
+async def add_monitored_area(request: Request):
+    """Add a new monitored area with polygon coordinates"""
+    try:
+        data = await request.json()
+        
+        # Validate required fields
+        required_fields = ["name", "coordinates"]
+        if not all(field in data for field in required_fields):
+            return JSONResponse({
+                "error": "Missing required fields: name, coordinates"
+            }, status_code=400)
+        
+        # Load existing areas
+        areas_data = load_monitored_areas()
+        
+        # Create new area object
+        import uuid
+        from datetime import datetime
+        
+        new_area = {
+            "id": str(uuid.uuid4()),
+            "name": data["name"],
+            "coordinates": data["coordinates"],  # Array of [lat, lng] pairs
+            "description": data.get("description", ""),
+            "created_at": datetime.now().isoformat(),
+            "last_monitored": None,
+            "monitoring_enabled": True,
+            "detection_count": 0
+        }
+        
+        # Add to areas list
+        areas_data["areas"].append(new_area)
+        
+        # Save to file
+        if save_monitored_areas(areas_data):
+            logger.info(f"Added new monitored area: {new_area['name']} ({new_area['id']})")
+            return JSONResponse({
+                "success": True,
+                "area": new_area
+            })
+        else:
+            return JSONResponse({
+                "error": "Failed to save monitored area"
+            }, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Error adding monitored area: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.delete("/api/monitored-areas/{area_id}")
+async def delete_monitored_area(area_id: str):
+    """Delete a monitored area"""
+    try:
+        areas_data = load_monitored_areas()
+        
+        # Find and remove area
+        original_count = len(areas_data["areas"])
+        areas_data["areas"] = [a for a in areas_data["areas"] if a["id"] != area_id]
+        
+        if len(areas_data["areas"]) == original_count:
+            return JSONResponse({
+                "error": "Area not found"
+            }, status_code=404)
+        
+        # Save updated data
+        if save_monitored_areas(areas_data):
+            logger.info(f"Deleted monitored area: {area_id}")
+            return JSONResponse({"success": True})
+        else:
+            return JSONResponse({
+                "error": "Failed to save changes"
+            }, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Error deleting monitored area: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/monitored-areas/{area_id}/detect")
+async def run_detection_on_area(area_id: str, request: Request):
+    """Run ML detection on a specific monitored area"""
+    try:
+        # Load areas
+        areas_data = load_monitored_areas()
+        
+        # Find the area
+        area = next((a for a in areas_data["areas"] if a["id"] == area_id), None)
+        if not area:
+            return JSONResponse({
+                "error": "Area not found"
+            }, status_code=404)
+        
+        # Get request params
+        params = await request.json() if request.method == "POST" else {}
+        
+        # Calculate center point from polygon coordinates
+        coords = area["coordinates"]
+        center_lat = sum(c[0] for c in coords) / len(coords)
+        center_lng = sum(c[1] for c in coords) / len(coords)
+        
+        # Calculate bounds
+        lats = [c[0] for c in coords]
+        lngs = [c[1] for c in coords]
+        bounds = {
+            "min_lat": min(lats),
+            "max_lat": max(lats),
+            "min_lng": min(lngs),
+            "max_lng": max(lngs)
+        }
+        
+        logger.info(f"Running ML detection on area: {area['name']} (center: {center_lat}, {center_lng})")
+        
+        # Import ML functions
+        from src.ml.api_integration import run_auto_detection
+        
+        # Prepare request data for ML system
+        ml_request = {
+            "latitude": center_lat,
+            "longitude": center_lng,
+            "location_name": area["name"],
+            "bounds": bounds,
+            "analysis_type": "monitored-area",
+            "area_id": area_id,
+            "polygon_coordinates": coords
+        }
+        
+        # Run ML detection
+        result = await run_auto_detection(ml_request)
+        
+        # Update area's last monitored timestamp
+        from datetime import datetime
+        for a in areas_data["areas"]:
+            if a["id"] == area_id:
+                a["last_monitored"] = datetime.now().isoformat()
+                if result.get("deforestation_detected"):
+                    a["detection_count"] = a.get("detection_count", 0) + 1
+                break
+        
+        save_monitored_areas(areas_data)
+        
+        return JSONResponse({
+            "success": True,
+            "area": area,
+            "detection_result": result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error running detection on area: {e}")
+        return JSONResponse({
+            "error": str(e)
+        }, status_code=500)
+
+@app.patch("/api/monitored-areas/{area_id}")
+async def update_monitored_area(area_id: str, request: Request):
+    """Update a monitored area's settings"""
+    try:
+        data = await request.json()
+        areas_data = load_monitored_areas()
+        
+        # Find and update area
+        area = next((a for a in areas_data["areas"] if a["id"] == area_id), None)
+        if not area:
+            return JSONResponse({
+                "error": "Area not found"
+            }, status_code=404)
+        
+        # Update allowed fields
+        if "name" in data:
+            area["name"] = data["name"]
+        if "description" in data:
+            area["description"] = data["description"]
+        if "monitoring_enabled" in data:
+            area["monitoring_enabled"] = data["monitoring_enabled"]
+        
+        # Save changes
+        if save_monitored_areas(areas_data):
+            logger.info(f"Updated monitored area: {area_id}")
+            return JSONResponse({
+                "success": True,
+                "area": area
+            })
+        else:
+            return JSONResponse({
+                "error": "Failed to save changes"
+            }, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Error updating monitored area: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # Add more endpoints as needed for processing, status, etc.
 
 if __name__ == "__main__":

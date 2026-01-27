@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { RefreshCw, Calendar, Search, Eye } from 'lucide-react';
+import { RefreshCw, Calendar, Search, Eye, Pencil, Trash2, Play } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import { apiFetch, apiUrl } from '../utils/api';
+import InteractiveMap from '../components/InteractiveMap';
 
 const MapViewPage: React.FC = () => {
   const { alerts, detectionData, selectedRegion } = useData();
@@ -45,6 +46,17 @@ const MapViewPage: React.FC = () => {
     deforestationPercent?: number;
     forestLoss?: number;
   } | null>(null);
+
+  // New states for monitored areas
+  const [useInteractiveMap, setUseInteractiveMap] = useState(false);
+  const [monitoredAreas, setMonitoredAreas] = useState<any[]>([]);
+  const [drawnCoordinates, setDrawnCoordinates] = useState<[number, number][] | null>(null);
+  const [showSaveAreaDialog, setShowSaveAreaDialog] = useState(false);
+  const [newAreaName, setNewAreaName] = useState('');
+  const [newAreaDescription, setNewAreaDescription] = useState('');
+  const [selectedMonitoredArea, setSelectedMonitoredArea] = useState<any>(null);
+  const [areaDetectionRunning, setAreaDetectionRunning] = useState(false);
+  const [areaDetectionResult, setAreaDetectionResult] = useState<any>(null);
 
   const fetchMlStatus = async () => {
     try {
@@ -368,6 +380,133 @@ const MapViewPage: React.FC = () => {
       alert('Failed to start monitoring. Please try again.');
     } finally {
       setIsMonitoring(false);
+    }
+  };
+
+  // ========================================
+  // Monitored Areas Functions
+  // ========================================
+
+  const fetchMonitoredAreas = async () => {
+    try {
+      const res = await apiFetch('/api/monitored-areas');
+      if (res.ok) {
+        const data = await res.json();
+        setMonitoredAreas(data.areas || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch monitored areas:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (useInteractiveMap) {
+      fetchMonitoredAreas();
+    }
+  }, [useInteractiveMap]);
+
+  const handleAreaDrawn = (coordinates: [number, number][]) => {
+    setDrawnCoordinates(coordinates);
+    setShowSaveAreaDialog(true);
+  };
+
+  const saveMonitoredArea = async () => {
+    if (!drawnCoordinates || !newAreaName.trim()) {
+      alert('Please provide an area name');
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/api/monitored-areas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newAreaName,
+          description: newAreaDescription,
+          coordinates: drawnCoordinates
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMonitoredAreas(prev => [...prev, data.area]);
+        setShowSaveAreaDialog(false);
+        setNewAreaName('');
+        setNewAreaDescription('');
+        setDrawnCoordinates(null);
+        alert(`✅ Area "${data.area.name}" saved successfully!`);
+      } else {
+        const error = await res.json();
+        alert(`Failed to save area: ${error.error}`);
+      }
+    } catch (e) {
+      console.error('Error saving monitored area:', e);
+      alert('Failed to save monitored area. Please try again.');
+    }
+  };
+
+  const deleteMonitoredArea = async (areaId: string) => {
+    if (!confirm('Are you sure you want to delete this monitored area?')) {
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/api/monitored-areas/${areaId}`, {
+        method: 'DELETE'
+      });
+
+      if (res.ok) {
+        setMonitoredAreas(prev => prev.filter(a => a.id !== areaId));
+        if (selectedMonitoredArea?.id === areaId) {
+          setSelectedMonitoredArea(null);
+          setAreaDetectionResult(null);
+        }
+        alert('✅ Area deleted successfully!');
+      } else {
+        alert('Failed to delete area');
+      }
+    } catch (e) {
+      console.error('Error deleting area:', e);
+      alert('Failed to delete area. Please try again.');
+    }
+  };
+
+  const runDetectionOnArea = async (areaId: string) => {
+    setAreaDetectionRunning(true);
+    setAreaDetectionResult(null);
+
+    try {
+      const res = await apiFetch(`/api/monitored-areas/${areaId}/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setAreaDetectionResult(data.detection_result);
+        // Update the area's last monitored time in the list
+        setMonitoredAreas(prev => prev.map(a => 
+          a.id === areaId ? { ...a, last_monitored: data.area.last_monitored } : a
+        ));
+        alert('✅ Detection completed successfully!');
+      } else {
+        const error = await res.json();
+        alert(`Detection failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error('Error running detection:', e);
+      alert('Detection failed. Please try again.');
+    } finally {
+      setAreaDetectionRunning(false);
+    }
+  };
+
+  const handleAreaClick = (areaId: string) => {
+    const area = monitoredAreas.find(a => a.id === areaId);
+    if (area) {
+      setSelectedMonitoredArea(area);
+      setAreaDetectionResult(null);
     }
   };
 
@@ -1283,32 +1422,206 @@ const MapViewPage: React.FC = () => {
       {/* Backend Map Integration */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden mb-8">
         <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Deforestation Map with NDVI Layers</h2>
-          {mapError && (
+          <h2 className="text-lg font-semibold text-gray-900">
+            {useInteractiveMap ? 'Interactive Map - Draw Areas to Monitor' : 'Deforestation Map with NDVI Layers'}
+          </h2>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => { setMapError(false); setMapKey(prev => prev + 1); }}
-              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              onClick={() => setUseInteractiveMap(!useInteractiveMap)}
+              className={`px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
+                useInteractiveMap 
+                  ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
             >
-              Try API Map
+              <Pencil className="h-4 w-4" />
+              {useInteractiveMap ? 'Drawing Mode Active' : 'Enable Area Drawing'}
             </button>
-          )}
-          {!mapError && (
-            <button
-              onClick={() => { setMapError(true); setMapKey(prev => prev + 1); }}
-              className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
-            >
-              Use Static Map
-            </button>
-          )}
-        </div>
-        {mapError && (
-          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mx-4 mt-4">
-            <p className="text-sm text-yellow-700">
-              ℹ️ Showing static map. The API server may be offline. Start it with: <code>cd backend; python start_api.py</code>
-            </p>
+            {!useInteractiveMap && mapError && (
+              <button
+                onClick={() => { setMapError(false); setMapKey(prev => prev + 1); }}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Try API Map
+              </button>
+            )}
+            {!useInteractiveMap && !mapError && (
+              <button
+                onClick={() => { setMapError(true); setMapKey(prev => prev + 1); }}
+                className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
+              >
+                Use Static Map
+              </button>
+            )}
           </div>
-        )}
-        <iframe
+        </div>
+        
+        {useInteractiveMap ? (
+          <div className="p-4">
+            <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h3 className="font-semibold text-blue-900 mb-2">📍 How to Mark Areas for Monitoring:</h3>
+              <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+                <li>Click the polygon/rectangle tool in the top-right corner of the map</li>
+                <li>Click on the map to draw your monitoring area</li>
+                <li>Complete the shape by clicking the first point again (for polygon)</li>
+                <li>Give your area a name and save it</li>
+                <li>Run ML detection on the saved area to monitor deforestation</li>
+              </ol>
+            </div>
+
+            <InteractiveMap
+              center={selectedLocation ? [selectedLocation.latitude, selectedLocation.longitude] : undefined}
+              onAreaDrawn={handleAreaDrawn}
+              existingAreas={monitoredAreas}
+              onAreaClick={handleAreaClick}
+              drawingEnabled={true}
+            />
+
+            {/* Monitored Areas List */}
+            {monitoredAreas.length > 0 && (
+              <div className="mt-6 bg-gray-50 rounded-lg p-4">
+                <h3 className="font-semibold text-gray-900 mb-3">📋 Your Monitored Areas ({monitoredAreas.length})</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {monitoredAreas.map(area => (
+                    <div
+                      key={area.id}
+                      className={`bg-white border rounded-lg p-3 transition-all cursor-pointer ${
+                        selectedMonitoredArea?.id === area.id 
+                          ? 'ring-2 ring-indigo-500 shadow-md' 
+                          : 'hover:shadow-md'
+                      }`}
+                      onClick={() => handleAreaClick(area.id)}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-gray-900">{area.name}</h4>
+                          {area.description && (
+                            <p className="text-xs text-gray-600 mt-1">{area.description}</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteMonitoredArea(area.id);
+                          }}
+                          className="text-red-600 hover:text-red-800 p-1"
+                          title="Delete area"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      
+                      <div className="text-xs text-gray-500 space-y-1">
+                        <div>Created: {new Date(area.created_at).toLocaleDateString()}</div>
+                        {area.last_monitored && (
+                          <div>Last checked: {new Date(area.last_monitored).toLocaleString()}</div>
+                        )}
+                        {area.detection_count > 0 && (
+                          <div className="text-red-600 font-semibold">
+                            ⚠️ {area.detection_count} detections
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          runDetectionOnArea(area.id);
+                        }}
+                        disabled={areaDetectionRunning}
+                        className={`mt-2 w-full px-3 py-2 text-sm rounded transition-colors flex items-center justify-center gap-2 ${
+                          areaDetectionRunning 
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        }`}
+                      >
+                        {areaDetectionRunning ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Running...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="h-4 w-4" />
+                            Run Detection
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Selected Area Detection Results */}
+            {selectedMonitoredArea && areaDetectionResult && (
+              <div className="mt-6 bg-white border rounded-lg p-4 shadow-md">
+                <h3 className="font-semibold text-gray-900 mb-3">
+                  📊 Detection Results: {selectedMonitoredArea.name}
+                </h3>
+                <div className={`p-4 rounded-lg ${
+                  areaDetectionResult.deforestation_detected 
+                    ? 'bg-red-50 border border-red-200' 
+                    : 'bg-green-50 border border-green-200'
+                }`}>
+                  <div className="text-lg font-semibold mb-2 ${areaDetectionResult.deforestation_detected ? 'text-red-700' : 'text-green-700'}">
+                    {areaDetectionResult.deforestation_detected ? '⚠️ Deforestation Detected' : '✅ No Deforestation Detected'}
+                  </div>
+                  
+                  {areaDetectionResult.change?.vegetation_trend && (
+                    <div className={`mb-3 p-2 rounded text-xs font-medium ${
+                      areaDetectionResult.change.vegetation_trend === 'growth' 
+                        ? 'bg-green-100 text-green-800' 
+                        : areaDetectionResult.change.vegetation_trend === 'decline'
+                        ? 'bg-red-100 text-red-800'
+                        : 'bg-gray-100 text-gray-800'
+                    }`}>
+                      🌿 Vegetation Trend: <strong>{areaDetectionResult.change.vegetation_trend.toUpperCase()}</strong>
+                      {areaDetectionResult.change.interpretation && (
+                        <div className="mt-1 opacity-90">{areaDetectionResult.change.interpretation}</div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="font-medium text-gray-700">Forest Cover Before:</div>
+                      <div className="text-lg">{(areaDetectionResult.before?.forest_cover_percent || 0).toFixed(2)}%</div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-gray-700">Forest Cover After:</div>
+                      <div className="text-lg">{(areaDetectionResult.after?.forest_cover_percent || 0).toFixed(2)}%</div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-gray-700">Forest Loss:</div>
+                      <div className="text-lg text-red-700 font-semibold">
+                        {(areaDetectionResult.change?.forest_drop_percent || 0).toFixed(2)}%
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-gray-700">Relative Loss:</div>
+                      <div className="text-lg text-red-700 font-semibold">
+                        {(areaDetectionResult.change?.forest_loss_percent || 0).toFixed(2)}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {mapError && (
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mx-4 mt-4">
+                <p className="text-sm text-yellow-700">
+                  ℹ️ Showing static map. The API server may be offline. Start it with: <code>cd backend; python start_api.py</code>
+                </p>
+              </div>
+            )}
+            <iframe
           key={mapKey}
           src={backendMapUrl}
           title="Deforestation Map"
@@ -1366,6 +1679,8 @@ const MapViewPage: React.FC = () => {
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* Image Zoom Modal */}
@@ -1510,6 +1825,82 @@ const MapViewPage: React.FC = () => {
             {/* Instructions */}
             <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-75 text-white text-xs px-4 py-2 rounded-lg max-w-xl text-center">
               🖱️ Scroll wheel or +/− buttons to zoom • ⌨️ Keyboard: +/− keys, 0 to reset • 🖱️ Double-click to toggle zoom • ✕ Click outside or ESC to close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save Monitored Area Dialog */}
+      {showSaveAreaDialog && (
+        <div 
+          className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4"
+          onClick={() => setShowSaveAreaDialog(false)}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              💾 Save Monitored Area
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="area-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Area Name *
+                </label>
+                <input
+                  id="area-name"
+                  type="text"
+                  value={newAreaName}
+                  onChange={(e) => setNewAreaName(e.target.value)}
+                  placeholder="e.g., Chirinda Forest East"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="area-description" className="block text-sm font-medium text-gray-700 mb-1">
+                  Description (optional)
+                </label>
+                <textarea
+                  id="area-description"
+                  value={newAreaDescription}
+                  onChange={(e) => setNewAreaDescription(e.target.value)}
+                  placeholder="Add notes about this area..."
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="text-xs text-gray-500">
+                <strong>Coordinates:</strong> {drawnCoordinates?.length || 0} points drawn
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowSaveAreaDialog(false);
+                  setNewAreaName('');
+                  setNewAreaDescription('');
+                  setDrawnCoordinates(null);
+                }}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveMonitoredArea}
+                disabled={!newAreaName.trim()}
+                className={`px-4 py-2 text-sm rounded-md transition-colors ${
+                  newAreaName.trim()
+                    ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                Save Area
+              </button>
             </div>
           </div>
         </div>
