@@ -1220,7 +1220,10 @@ async def add_monitored_area(request: Request):
             "created_at": datetime.now().isoformat(),
             "last_monitored": None,
             "monitoring_enabled": True,
-            "detection_count": 0
+            "continuous_monitoring": data.get("continuous_monitoring", True),
+            "alert_enabled": data.get("alert_enabled", True),
+            "detection_count": 0,
+            "detection_history": []
         }
         
         # Add to areas list
@@ -1344,11 +1347,31 @@ async def run_detection_on_area(area_id: str, request: Request):
             ignore_seasonal_check=False
         )
         
-        # Update area's last monitored timestamp
+        # Update area's last monitored timestamp and detection history
         from datetime import datetime
         for a in areas_data["areas"]:
             if a["id"] == area_id:
                 a["last_monitored"] = datetime.now().isoformat()
+                
+                # Add to detection history
+                if "detection_history" not in a:
+                    a["detection_history"] = []
+                
+                detection_record = {
+                    "timestamp": datetime.now().isoformat(),
+                    "before_date": before_date,
+                    "after_date": after_date,
+                    "deforestation_detected": result.get("deforestation_detected", False),
+                    "forest_loss_percent": result.get("change", {}).get("forest_loss_percent"),
+                    "vegetation_trend": result.get("change", {}).get("vegetation_trend")
+                }
+                a["detection_history"].append(detection_record)
+                
+                # Keep only last 50 detection records
+                if len(a["detection_history"]) > 50:
+                    a["detection_history"] = a["detection_history"][-50:]
+                
+                # Update detection count only for actual deforestation
                 if result.get("deforestation_detected"):
                     a["detection_count"] = a.get("detection_count", 0) + 1
                 break
@@ -1390,6 +1413,10 @@ async def update_monitored_area(area_id: str, request: Request):
             area["description"] = data["description"]
         if "monitoring_enabled" in data:
             area["monitoring_enabled"] = data["monitoring_enabled"]
+        if "continuous_monitoring" in data:
+            area["continuous_monitoring"] = data["continuous_monitoring"]
+        if "alert_enabled" in data:
+            area["alert_enabled"] = data["alert_enabled"]
         
         # Save changes
         if save_monitored_areas(areas_data):

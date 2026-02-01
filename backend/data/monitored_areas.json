@@ -1,6 +1,27 @@
-# Monitored Areas Storage
-# This file stores user-defined areas for monitoring
-
 {
-  "areas": []
+  "areas": [
+    {
+      "id": "80aa81c2-a728-4524-867a-061475d9c251",
+      "name": "Lake Chivero Forest",
+      "coordinates": [
+        [
+          -17.917892905585138,
+          30.82251262625505
+        ],
+        [
+          -17.917892905585138,
+          30.82251262625505
+        ],
+        [
+          -17.917892905585138,
+          30.82251262625505
+        ]
+      ],
+      "description": "its the forest around lake chivero",
+      "created_at": "2026-02-01T10:14:38.201202",
+      "last_monitored": null,
+      "monitoring_enabled": true,
+      "detection_count": 0
+    }
+  ]
 }

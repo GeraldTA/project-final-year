@@ -57,6 +57,9 @@ const MapViewPage: React.FC = () => {
   const [selectedMonitoredArea, setSelectedMonitoredArea] = useState<any>(null);
   const [areaDetectionRunning, setAreaDetectionRunning] = useState(false);
   const [areaDetectionResult, setAreaDetectionResult] = useState<any>(null);
+  const [areaBeforeDate, setAreaBeforeDate] = useState('');
+  const [areaAfterDate, setAreaAfterDate] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState<string | null>(null);
 
   const fetchMlStatus = async () => {
     try {
@@ -423,7 +426,9 @@ const MapViewPage: React.FC = () => {
         body: JSON.stringify({
           name: newAreaName,
           description: newAreaDescription,
-          coordinates: drawnCoordinates
+          coordinates: drawnCoordinates,
+          continuous_monitoring: true,
+          alert_enabled: true
         })
       });
 
@@ -476,10 +481,14 @@ const MapViewPage: React.FC = () => {
     setAreaDetectionResult(null);
 
     try {
+      const params: any = {};
+      if (areaBeforeDate) params.before_date = areaBeforeDate;
+      if (areaAfterDate) params.after_date = areaAfterDate;
+
       const res = await apiFetch(`/api/monitored-areas/${areaId}/detect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify(params)
       });
 
       if (res.ok) {
@@ -1477,6 +1486,62 @@ const MapViewPage: React.FC = () => {
               drawingEnabled={true}
             />
 
+            {/* Deforestation Alerts */}
+            {monitoredAreas.filter(a => a.detection_count > 0 && a.alert_enabled !== false).length > 0 && (
+              <div className="mt-6 bg-red-50 border-2 border-red-300 rounded-lg p-4">
+                <h3 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
+                  <span className="text-xl">🚨</span>
+                  Deforestation Alerts ({monitoredAreas.filter(a => a.detection_count > 0).length})
+                </h3>
+                <div className="space-y-2">
+                  {monitoredAreas
+                    .filter(a => a.detection_count > 0 && a.alert_enabled !== false)
+                    .map(area => (
+                      <div
+                        key={area.id}
+                        className="bg-white border-l-4 border-red-600 p-3 rounded cursor-pointer hover:shadow-md transition-all"
+                        onClick={() => handleAreaClick(area.id)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="font-semibold text-red-900">{area.name}</div>
+                            <div className="text-sm text-red-700 mt-1">
+                              ⚠️ {area.detection_count} deforestation event{area.detection_count > 1 ? 's' : ''} detected
+                            </div>
+                            {area.last_monitored && (
+                              <div className="text-xs text-gray-600 mt-1">
+                                Last detected: {new Date(area.last_monitored).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Dismiss alert by updating area
+                              const updateAlert = async () => {
+                                await apiFetch(`/api/monitored-areas/${area.id}`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ alert_enabled: false })
+                                });
+                                fetchMonitoredAreas();
+                              };
+                              updateAlert();
+                            }}
+                            className="text-xs text-gray-500 hover:text-gray-700 px-2"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+                <div className="mt-3 text-xs text-red-700 italic">
+                  💡 Click on an alert to view detailed detection results
+                </div>
+              </div>
+            )}
+
             {/* Monitored Areas List */}
             {monitoredAreas.length > 0 && (
               <div className="mt-6 bg-gray-50 rounded-lg p-4">
@@ -1521,35 +1586,105 @@ const MapViewPage: React.FC = () => {
                             ⚠️ {area.detection_count} detections
                           </div>
                         )}
+                        {area.continuous_monitoring && (
+                          <div className="text-green-600 font-semibold flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                            Continuous monitoring active
+                          </div>
+                        )}
                       </div>
 
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          runDetectionOnArea(area.id);
-                        }}
-                        disabled={areaDetectionRunning}
-                        className={`mt-2 w-full px-3 py-2 text-sm rounded transition-colors flex items-center justify-center gap-2 ${
-                          areaDetectionRunning 
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                        }`}
-                      >
-                        {areaDetectionRunning ? (
-                          <>
-                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Running...
-                          </>
-                        ) : (
-                          <>
-                            <Play className="h-4 w-4" />
-                            Run Detection
-                          </>
-                        )}
-                      </button>
+                      {/* Date Range Selection */}
+                      {showDatePicker === area.id && (
+                        <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded space-y-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="text-xs font-semibold text-blue-900 mb-2">Select Date Range:</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-xs text-gray-600">Before:</label>
+                              <input
+                                type="date"
+                                value={areaBeforeDate}
+                                onChange={(e) => setAreaBeforeDate(e.target.value)}
+                                className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-600">After:</label>
+                              <input
+                                type="date"
+                                value={areaAfterDate}
+                                onChange={(e) => setAreaAfterDate(e.target.value)}
+                                className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
+                              />
+                            </div>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowDatePicker(null);
+                            }}
+                            className="text-xs text-blue-600 hover:text-blue-800 underline"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="mt-2 space-y-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (showDatePicker === area.id) {
+                              setShowDatePicker(null);
+                            } else {
+                              setShowDatePicker(area.id);
+                              // Set default dates if not set
+                              if (!areaAfterDate) {
+                                const today = new Date();
+                                setAreaAfterDate(today.toISOString().split('T')[0]);
+                              }
+                              if (!areaBeforeDate) {
+                                const twoMonthsAgo = new Date();
+                                twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+                                setAreaBeforeDate(twoMonthsAgo.toISOString().split('T')[0]);
+                              }
+                            }
+                          }}
+                          className="w-full px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+                        >
+                          <Calendar className="h-3 w-3" />
+                          {showDatePicker === area.id ? 'Hide Dates' : 'Select Date Range'}
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            runDetectionOnArea(area.id);
+                          }}
+                          disabled={areaDetectionRunning}
+                          className={`w-full px-3 py-2 text-sm rounded transition-colors flex items-center justify-center gap-2 ${
+                            areaDetectionRunning 
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          }`}
+                        >
+                          {areaDetectionRunning ? (
+                            <>
+                              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              Running...
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-4 w-4" />
+                              Run Detection Now
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1609,6 +1744,37 @@ const MapViewPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Detection History */}
+                {selectedMonitoredArea?.detection_history && selectedMonitoredArea.detection_history.length > 0 && (
+                  <div className="mt-4 border-t pt-4">
+                    <h4 className="font-semibold text-gray-900 mb-2">📜 Detection History</h4>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {selectedMonitoredArea.detection_history.slice().reverse().map((record: any, idx: number) => (
+                        <div key={idx} className={`text-xs p-2 rounded ${
+                          record.deforestation_detected ? 'bg-red-50 border border-red-200' : 'bg-gray-50'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">
+                              {record.deforestation_detected ? '⚠️ Deforestation' : '✅ No Change'}
+                            </span>
+                            <span className="text-gray-600">
+                              {new Date(record.timestamp).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="text-gray-600 mt-1">
+                            {record.before_date} → {record.after_date}
+                          </div>
+                          {record.forest_loss_percent !== undefined && record.forest_loss_percent > 0 && (
+                            <div className="text-red-700 font-semibold mt-1">
+                              Loss: {record.forest_loss_percent.toFixed(2)}%
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
