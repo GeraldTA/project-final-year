@@ -1100,21 +1100,42 @@ async def analyze_location(request: Request):
         
         logger.info(f"Analyzing location: {location_name} ({latitude}, {longitude})")
         
-        # Import ML functions
-        from src.ml.api_integration import run_auto_detection
+        # Import ML detection function
+        from src.ml.api_integration import detect_change_auto
+        from datetime import datetime, timedelta
         
-        # Prepare request data for ML system
-        ml_request = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "location_name": location_name,
-            "bounds": bounds,
-            "analysis_type": "on-demand"
-        }
+        # Get dates (use last 60 days as default)
+        after_date = datetime.now().strftime("%Y-%m-%d")
+        before_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         
-        # Run ML detection (reuse existing endpoint logic)
-        # This will download imagery, run detection, and return results
-        result = await run_auto_detection(ml_request)
+        # Calculate bounds if not provided
+        if bounds:
+            west = bounds.get("min_lng", longitude - 0.02)
+            east = bounds.get("max_lng", longitude + 0.02)
+            south = bounds.get("min_lat", latitude - 0.02)
+            north = bounds.get("max_lat", latitude + 0.02)
+        else:
+            # Default: ~2km box around point
+            west = longitude - 0.02
+            east = longitude + 0.02
+            south = latitude - 0.02
+            north = latitude + 0.02
+        
+        # Run ML detection
+        result = await detect_change_auto(
+            before_date=before_date,
+            after_date=after_date,
+            west=west,
+            south=south,
+            east=east,
+            north=north,
+            window_days=60,
+            max_cloud_cover=80.0,
+            scale=10,
+            dimensions=512,
+            force_download=False,
+            ignore_seasonal_check=False
+        )
         
         return JSONResponse({
             "success": True,
@@ -1125,6 +1146,8 @@ async def analyze_location(request: Request):
         
     except Exception as e:
         logger.error(f"Location analysis error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return JSONResponse({
             "success": False,
             "message": f"Analysis error: {str(e)}"
@@ -1281,22 +1304,45 @@ async def run_detection_on_area(area_id: str, request: Request):
         
         logger.info(f"Running ML detection on area: {area['name']} (center: {center_lat}, {center_lng})")
         
-        # Import ML functions
-        from src.ml.api_integration import run_auto_detection
+        # Import the detect_change_auto function and call it directly
+        from src.ml.api_integration import detect_change_auto
+        from datetime import datetime, timedelta
+        from fastapi import Query
         
-        # Prepare request data for ML system
-        ml_request = {
-            "latitude": center_lat,
-            "longitude": center_lng,
-            "location_name": area["name"],
-            "bounds": bounds,
-            "analysis_type": "monitored-area",
-            "area_id": area_id,
-            "polygon_coordinates": coords
-        }
+        # Get dates (use last 60 days as default)
+        after_date = datetime.now().strftime("%Y-%m-%d")
+        before_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         
-        # Run ML detection
-        result = await run_auto_detection(ml_request)
+        # Override with user-provided dates if available
+        if params.get("before_date"):
+            before_date = params["before_date"]
+        if params.get("after_date"):
+            after_date = params["after_date"]
+        
+        # Calculate buffer around polygon to create reasonable bounds
+        lat_buffer = 0.02  # ~2km
+        lng_buffer = 0.02
+        
+        west = bounds["min_lng"] - lng_buffer
+        east = bounds["max_lng"] + lng_buffer
+        south = bounds["min_lat"] - lat_buffer
+        north = bounds["max_lat"] + lat_buffer
+        
+        # Call the ML detection function with proper parameters
+        result = await detect_change_auto(
+            before_date=before_date,
+            after_date=after_date,
+            west=west,
+            south=south,
+            east=east,
+            north=north,
+            window_days=params.get("window_days", 60),
+            max_cloud_cover=params.get("max_cloud_cover", 80.0),
+            scale=10,
+            dimensions=512,
+            force_download=False,
+            ignore_seasonal_check=False
+        )
         
         # Update area's last monitored timestamp
         from datetime import datetime
@@ -1317,6 +1363,8 @@ async def run_detection_on_area(area_id: str, request: Request):
         
     except Exception as e:
         logger.error(f"Error running detection on area: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return JSONResponse({
             "error": str(e)
         }, status_code=500)
