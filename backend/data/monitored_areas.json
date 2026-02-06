@@ -19,9 +19,270 @@
       ],
       "description": "its the forest around lake chivero",
       "created_at": "2026-02-01T10:14:38.201202",
+      "last_monitored": "2026-02-04T12:24:00.102804",
+      "monitoring_enabled": true,
+      "detection_count": 1,
+      "detection_history": [
+        {
+          "timestamp": "2026-02-03T12:13:28.018874",
+          "before_date": "2022-01-03",
+          "after_date": "2026-01-02",
+          "deforestation_detected": true,
+          "forest_loss_percent": 50.05073121687492,
+          "vegetation_trend": "decline"
+        },
+        {
+          "timestamp": "2026-02-03T12:16:29.773225",
+          "before_date": "2021-01-02",
+          "after_date": "2026-01-02",
+          "deforestation_detected": false,
+          "forest_loss_percent": 0.0,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-03T12:16:53.223059",
+          "before_date": "2021-01-02",
+          "after_date": "2026-01-02",
+          "deforestation_detected": false,
+          "forest_loss_percent": 0.0,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T09:47:19.890115",
+          "before_date": "2024-01-15",
+          "after_date": "2024-03-20",
+          "deforestation_detected": false,
+          "forest_loss_percent": -12.040614807707968,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T10:19:57.593137",
+          "before_date": "2023-06-01",
+          "after_date": "2024-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 2.3862033115130146,
+          "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-02-04T12:24:00.102809",
+          "before_date": "2021-01-01",
+          "after_date": "2023-08-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": -15.167386724638213,
+          "vegetation_trend": "stable"
+        }
+      ]
+    },
+    {
+      "id": "6ca18266-9eb4-4cd9-9870-45e53eab0005",
+      "name": "hwange area",
+      "coordinates": [
+        [
+          -18.913691777754224,
+          29.014617913635448
+        ],
+        [
+          -19.170723716027346,
+          29.018051141174517
+        ],
+        [
+          -19.07405892687951,
+          29.217864983947955
+        ],
+        [
+          -18.92213600171454,
+          29.184905999572948
+        ]
+      ],
+      "description": "game park",
+      "created_at": "2026-02-04T09:07:07.290562",
+      "last_monitored": "2026-02-04T12:34:44.472827",
+      "monitoring_enabled": true,
+      "continuous_monitoring": true,
+      "alert_enabled": true,
+      "detection_count": 0,
+      "detection_history": [
+        {
+          "timestamp": "2026-02-04T09:16:57.929071",
+          "before_date": "2023-01-04",
+          "after_date": "2026-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 3.4463888952875963,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T09:25:12.530728",
+          "before_date": "2023-01-04",
+          "after_date": "2026-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 3.4463888952875963,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T09:25:22.092101",
+          "before_date": "2023-01-04",
+          "after_date": "2026-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 3.4463888952875963,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T10:44:23.025979",
+          "before_date": "2023-01-01",
+          "after_date": "2026-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 3.4463888952875963,
+          "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-02-04T12:27:32.529526",
+          "before_date": "2022-01-01",
+          "after_date": "2025-12-31",
+          "deforestation_detected": false,
+          "forest_loss_percent": 11.953850367217328,
+          "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-02-04T12:27:45.014316",
+          "before_date": "2022-01-01",
+          "after_date": "2025-12-31",
+          "deforestation_detected": false,
+          "forest_loss_percent": 11.953850367217328,
+          "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-02-04T12:33:25.180121",
+          "before_date": "2022-01-01",
+          "after_date": "2025-12-31",
+          "deforestation_detected": false,
+          "forest_loss_percent": 11.953850367217328,
+          "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-02-04T12:34:25.320676",
+          "before_date": "2021-01-01",
+          "after_date": "2025-12-31",
+          "deforestation_detected": false,
+          "forest_loss_percent": 13.555473255618866,
+          "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-02-04T12:34:44.472832",
+          "before_date": "2023-01-01",
+          "after_date": "2025-12-31",
+          "deforestation_detected": false,
+          "forest_loss_percent": 3.432260113040728,
+          "vegetation_trend": "stable"
+        }
+      ]
+    },
+    {
+      "id": "bc9ff25c-d540-43e8-a2db-a672b641e48f",
+      "name": "Harare l marked",
+      "coordinates": [
+        [
+          -17.679614778958992,
+          30.823242086917162
+        ],
+        [
+          -18.066490159343815,
+          30.812255758792162
+        ],
+        [
+          -18.066490159343815,
+          31.31762685254217
+        ],
+        [
+          -17.721479656730484,
+          31.284667868167162
+        ]
+      ],
+      "description": "",
+      "created_at": "2026-02-04T09:31:53.830605",
+      "last_monitored": "2026-02-04T10:43:01.928955",
+      "monitoring_enabled": true,
+      "continuous_monitoring": true,
+      "alert_enabled": true,
+      "detection_count": 1,
+      "detection_history": [
+        {
+          "timestamp": "2026-02-04T10:43:01.928966",
+          "before_date": "2023-01-01",
+          "after_date": "2026-01-01",
+          "deforestation_detected": true,
+          "forest_loss_percent": -661.4796580451377,
+          "vegetation_trend": "decline"
+        }
+      ]
+    },
+    {
+      "id": "593179fd-8245-4075-9866-0462f2809a09",
+      "name": "nust area l marked",
+      "coordinates": [
+        [
+          -20.149397023352194,
+          28.633169173408536
+        ],
+        [
+          -20.164625455664773,
+          28.629650115180997
+        ],
+        [
+          -20.166156274069397,
+          28.659090041328458
+        ],
+        [
+          -20.148832978810976,
+          28.651193617988618
+        ]
+      ],
+      "description": "",
+      "created_at": "2026-02-04T12:19:37.660245",
       "last_monitored": null,
       "monitoring_enabled": true,
-      "detection_count": 0
+      "continuous_monitoring": true,
+      "alert_enabled": true,
+      "detection_count": 0,
+      "detection_history": []
+    },
+    {
+      "id": "252c83d4-ec5c-493a-b86c-6066dcca9945",
+      "name": "L DONT KNOW",
+      "coordinates": [
+        [
+          -18.983051673442933,
+          29.105392452911477
+        ],
+        [
+          -19.00869713419212,
+          29.10951232595835
+        ],
+        [
+          -19.007074120919366,
+          29.149337765411477
+        ],
+        [
+          -18.98175306401851,
+          29.14899444265757
+        ]
+      ],
+      "description": "",
+      "created_at": "2026-02-05T16:22:22.251006",
+      "last_monitored": "2026-02-05T16:24:18.043000",
+      "monitoring_enabled": true,
+      "continuous_monitoring": true,
+      "alert_enabled": true,
+      "detection_count": 0,
+      "detection_history": [
+        {
+          "timestamp": "2026-02-05T16:24:18.043014",
+          "before_date": "2021-01-02",
+          "after_date": "2025-01-01",
+          "deforestation_detected": false,
+          "forest_loss_percent": 8.606508485575691,
+          "vegetation_trend": "growth"
+        }
+      ]
     }
   ]
 }

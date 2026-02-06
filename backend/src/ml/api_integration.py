@@ -180,31 +180,26 @@ async def detect_change(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@ml_router.post("/detect-change-auto")
-async def detect_change_auto(
-    before_date: str = Query(..., description="Before date (YYYY-MM-DD)"),
-    after_date: str = Query(..., description="After date (YYYY-MM-DD)"),
-    west: float = Query(..., description="Bounding box west (lng)"),
-    south: float = Query(..., description="Bounding box south (lat)"),
-    east: float = Query(..., description="Bounding box east (lng)"),
-    north: float = Query(..., description="Bounding box north (lat)"),
-    window_days: int = Query(30, ge=1, le=90, description="Composite window in days"),
-    max_cloud_cover: float = Query(30.0, ge=0.0, le=100.0, description="Max cloud cover %"),
-    scale: int = Query(10, ge=10, le=60, description="Export pixel size in meters"),
-    dimensions: int = Query(512, ge=64, le=2048, description="Export image size in pixels (square)"),
-    force_download: bool = Query(False, description="Ignore cache and re-download"),
-    ignore_seasonal_check: bool = Query(False, description="Skip seasonal comparison validation"),
+async def detect_change_auto_internal(
+    before_date: str,
+    after_date: str,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    window_days: int = 30,
+    max_cloud_cover: float = 30.0,
+    scale: int = 10,
+    dimensions: int = 512,
+    force_download: bool = False,
+    ignore_seasonal_check: bool = False,
 ):
-    """Change detection without file paths.
-
-    Automatically creates two 10-band GeoTIFFs from Earth Engine (cached locally),
-    then runs BigEarthNet forest-probability change detection.
+    """Internal function for change detection - can be called from Python code.
     
-    IMPORTANT: To avoid false positives from seasonal vegetation changes,
-    before and after dates should be from the same season (ideally same month ±30 days).
+    This is the actual implementation that can be safely called from other Python modules.
     """
     if detector is None:
-        raise HTTPException(status_code=503, detail="ML model not loaded")
+        raise ValueError("ML model not loaded")
 
     try:
         # Lazy import to avoid pulling EE at FastAPI startup.
@@ -227,17 +222,22 @@ async def detect_change_auto(
             )
             logger.warning(seasonal_warning)
 
+        # Create date ranges: center the window around the specified dates
+        # For before_date, look back from that date
         before_start = (datetime.fromisoformat(before_date) - timedelta(days=window_days)).strftime("%Y-%m-%d")
         before_end = before_date
+        # For after_date, look forward from that date  
         after_start = after_date
         after_end = (datetime.fromisoformat(after_date) + timedelta(days=window_days)).strftime("%Y-%m-%d")
 
         logger.info(
-            "Auto-exporting Sentinel-2 composites: before=%s..%s after=%s..%s",
+            "Auto-exporting Sentinel-2 composites: before=%s..%s (centered on %s) after=%s..%s (centered on %s)",
             before_start,
             before_end,
+            before_date,
             after_start,
             after_end,
+            after_date,
         )
 
         before_export = export_s2_10band_geotiff(
@@ -286,6 +286,51 @@ async def detect_change_auto(
         
         return response
 
+    except Exception as e:
+        logger.error(f"Auto change detection failed: {e}")
+        raise ValueError(str(e))
+
+
+@ml_router.post("/detect-change-auto")
+async def detect_change_auto(
+    before_date: str = Query(..., description="Before date (YYYY-MM-DD)"),
+    after_date: str = Query(..., description="After date (YYYY-MM-DD)"),
+    west: float = Query(..., description="Bounding box west (lng)"),
+    south: float = Query(..., description="Bounding box south (lat)"),
+    east: float = Query(..., description="Bounding box east (lng)"),
+    north: float = Query(..., description="Bounding box north (lat)"),
+    window_days: int = Query(30, ge=1, le=90, description="Composite window in days"),
+    max_cloud_cover: float = Query(30.0, ge=0.0, le=100.0, description="Max cloud cover %"),
+    scale: int = Query(10, ge=10, le=60, description="Export pixel size in meters"),
+    dimensions: int = Query(512, ge=64, le=2048, description="Export image size in pixels (square)"),
+    force_download: bool = Query(False, description="Ignore cache and re-download"),
+    ignore_seasonal_check: bool = Query(False, description="Skip seasonal comparison validation"),
+):
+    """HTTP endpoint for change detection without file paths.
+
+    Automatically creates two 10-band GeoTIFFs from Earth Engine (cached locally),
+    then runs BigEarthNet forest-probability change detection.
+    
+    IMPORTANT: To avoid false positives from seasonal vegetation changes,
+    before and after dates should be from the same season (ideally same month ±30 days).
+    """
+    try:
+        return await detect_change_auto_internal(
+            before_date=before_date,
+            after_date=after_date,
+            west=west,
+            south=south,
+            east=east,
+            north=north,
+            window_days=window_days,
+            max_cloud_cover=max_cloud_cover,
+            scale=scale,
+            dimensions=dimensions,
+            force_download=force_download,
+            ignore_seasonal_check=ignore_seasonal_check,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Auto change detection failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

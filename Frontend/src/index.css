@@ -56,3 +56,119 @@ img[alt*="Zoomed"] {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Leaflet Draw Fixes for Rectangle Drawing */
+.leaflet-draw-section {
+  position: relative;
+}
+
+.leaflet-draw-toolbar {
+  margin-top: 0;
+}
+
+/* Ensure proper cursor for drawing */
+.leaflet-container.leaflet-draw-tooltip {
+  cursor: crosshair !important;
+}
+
+/* Rectangle drawing cursor */
+.leaflet-mouse-marker {
+  cursor: crosshair !important;
+}
+
+/* Drawing mode active cursor */
+.leaflet-container.leaflet-crosshair .leaflet-interactive {
+  cursor: crosshair !important;
+}
+
+/* Ensure rectangle is draggable during creation */
+.leaflet-editing-icon {
+  cursor: move !important;
+}
+
+/* Draw tooltip styling */
+.leaflet-draw-tooltip {
+  background: white;
+  border: 2px solid #4ECDC4;
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.leaflet-draw-tooltip-single {
+  background: white;
+  border: 2px solid #4ECDC4;
+  padding: 6px 10px;
+}
+
+/* Ensure draw handlers are clickable */
+.leaflet-draw-toolbar a {
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+/* Make sure the map container allows drawing interactions */
+.leaflet-container {
+  cursor: default;
+  background: #ddd;
+  touch-action: none;
+}
+
+/* Prevent user selection during drawing */
+.leaflet-container * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Drawing mode cursor override */
+.leaflet-draw-draw-rectangle {
+  cursor: crosshair !important;
+}
+
+/* When actively drawing */
+.leaflet-container.leaflet-crosshair {
+  cursor: crosshair !important;
+}
+
+.leaflet-container.leaflet-crosshair * {
+  cursor: crosshair !important;
+}
+
+/* Ensure all panes allow mouse events */
+.leaflet-pane {
+  pointer-events: auto !important;
+}
+
+/* Make sure overlay pane (where rectangles are drawn) is interactive */
+.leaflet-overlay-pane {
+  pointer-events: auto !important;
+  z-index: 400;
+}
+
+.leaflet-overlay-pane svg {
+  pointer-events: auto !important;
+}
+
+/* Ensure proper z-index for draw controls */
+.leaflet-top.leaflet-right {
+  z-index: 1000;
+}
+
+.leaflet-draw-actions {
+  z-index: 1001;
+}
+
+/* Style for the shape being drawn */
+.leaflet-interactive {
+  pointer-events: auto;
+}
+
+/* Ensure the drawing guide/ghost is visible */
+.leaflet-zoom-hide {
+  opacity: 0.5;
+}

@@ -57,9 +57,9 @@ const MapViewPage: React.FC = () => {
   const [selectedMonitoredArea, setSelectedMonitoredArea] = useState<any>(null);
   const [areaDetectionRunning, setAreaDetectionRunning] = useState(false);
   const [areaDetectionResult, setAreaDetectionResult] = useState<any>(null);
-  const [areaBeforeDate, setAreaBeforeDate] = useState('');
-  const [areaAfterDate, setAreaAfterDate] = useState('');
+  const [areaDates, setAreaDates] = useState<{ [key: string]: { before: string; after: string } }>({});
   const [showDatePicker, setShowDatePicker] = useState<string | null>(null);
+  const [areaError, setAreaError] = useState<string | null>(null);
 
   const fetchMlStatus = async () => {
     try {
@@ -230,18 +230,23 @@ const MapViewPage: React.FC = () => {
       south: String(b.min_lat ?? b.south),
       east: String(b.max_lng ?? b.east),
       north: String(b.max_lat ?? b.north),
-      window_days: '60',
+      window_days: '30',  // Reduced from 60 to 30 days for better date accuracy
       max_cloud_cover: '80',
       scale: '10',
       dimensions: '512'
     });
 
     setMlAutoRunning(true);
+    setMlAutoError(null);  // Clear previous errors
     try {
       const res = await apiFetch(`/api/ml/detect-change-auto?${params.toString()}`, {
         method: 'POST'
       });
-      if (!res.ok) throw new Error(`Auto ML request failed (${res.status})`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        const errorMsg = errorData.detail || `Auto ML request failed (${res.status})`;
+        throw new Error(errorMsg);
+      }
       const data = await res.json();
       console.log('📊 ML Auto Result:', data);
       console.log('📁 Exports:', data.exports);
@@ -477,13 +482,42 @@ const MapViewPage: React.FC = () => {
   };
 
   const runDetectionOnArea = async (areaId: string) => {
+    // Get dates FIRST before setting any state
+    const dates = areaDates[areaId];
+    
+    console.log('=== RUN DETECTION CALLED ===');
+    console.log('Area ID:', areaId);
+    console.log('Dates from state:', dates);
+    console.log('All areaDates:', areaDates);
+    
+    // CRITICAL: Validate dates exist BEFORE starting
+    if (!dates?.before || !dates?.after) {
+      const errorMsg = 'ERROR: No dates selected!\n\n' +
+                      'You must:\n' +
+                      '1. Click "Select Date Range"\n' +
+                      '2. Choose both Before and After dates\n' +
+                      '3. Then click "Run Detection Now"';
+      alert(errorMsg);
+      console.error('DATES MISSING:', { areaId, dates, allDates: areaDates });
+      return; // Exit immediately - don't even start the request
+    }
+    
+    console.log('✓ Dates validated, starting detection...');
+    console.log(`Before: ${dates.before}, After: ${dates.after}`);
+    
     setAreaDetectionRunning(true);
     setAreaDetectionResult(null);
+    setAreaError(null);
 
     try {
-      const params: any = {};
-      if (areaBeforeDate) params.before_date = areaBeforeDate;
-      if (areaAfterDate) params.after_date = areaAfterDate;
+      const params = {
+        before_date: dates.before,
+        after_date: dates.after
+      };
+      
+      console.log('=== SENDING REQUEST ===');
+      console.log('Request body:', params);
+      console.log('Request URL:', `/api/monitored-areas/${areaId}/detect`);
 
       const res = await apiFetch(`/api/monitored-areas/${areaId}/detect`, {
         method: 'POST',
@@ -491,23 +525,49 @@ const MapViewPage: React.FC = () => {
         body: JSON.stringify(params)
       });
 
+      console.log('Response status:', res.status);
+      console.log('Response OK:', res.ok);
+
       if (res.ok) {
         const data = await res.json();
+        console.log('Detection result data:', data);
         setAreaDetectionResult(data.detection_result);
+        
+        // CRITICAL: Set selected area so results display
+        const area = monitoredAreas.find(a => a.id === areaId);
+        if (area) {
+          setSelectedMonitoredArea({
+            ...area,
+            last_monitored: data.area.last_monitored,
+            detection_history: data.area.detection_history
+          });
+        }
+        
         // Update the area's last monitored time in the list
         setMonitoredAreas(prev => prev.map(a => 
-          a.id === areaId ? { ...a, last_monitored: data.area.last_monitored } : a
+          a.id === areaId ? { 
+            ...a, 
+            last_monitored: data.area.last_monitored,
+            detection_history: data.area.detection_history,
+            detection_count: data.area.detection_count
+          } : a
         ));
-        alert('✅ Detection completed successfully!');
+        setAreaError(null);
+        console.log('=== DETECTION SUCCESS - RESULTS SHOULD DISPLAY ===');
       } else {
-        const error = await res.json();
-        alert(`Detection failed: ${error.error}`);
+        const errorData = await res.json();
+        console.error('Error response:', errorData);
+        setAreaError(`Detection failed for area: ${errorData.error || errorData.detail || 'Unknown error'}`);
+        console.log('=== DETECTION FAILED ===');
       }
-    } catch (e) {
-      console.error('Error running detection:', e);
-      alert('Detection failed. Please try again.');
+    } catch (e: any) {
+      console.error('Exception during detection:', e);
+      console.error('Error stack:', e.stack);
+      setAreaError(`Detection failed: ${e.message || 'Please try again.'}`);
+      console.log('=== DETECTION EXCEPTION ===');
     } finally {
       setAreaDetectionRunning(false);
+      console.log('=== DETECTION REQUEST END ===');
     }
   };
 
@@ -1096,6 +1156,13 @@ const MapViewPage: React.FC = () => {
             />
           </div>
         </div>
+        
+        <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+          <div className="font-medium mb-1">ℹ️ How date selection works:</div>
+          <div>• System searches ±30 days around each date for cloud-free images</div>
+          <div>• Choose dates from the same season (e.g., Jan→Jan) for best results</div>
+          <div>• For Zimbabwe: avoid Oct-Apr (rainy season) for clearer images</div>
+        </div>
 
         <div className="mt-3 text-sm">
           <div className="text-gray-700">
@@ -1592,6 +1659,17 @@ const MapViewPage: React.FC = () => {
                             Continuous monitoring active
                           </div>
                         )}
+                        {areaDates[area.id] && (
+                          <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                            <div className="font-semibold text-blue-900 mb-1">📅 Selected Dates:</div>
+                            <div className="text-blue-800">
+                              Before: <strong>{areaDates[area.id]?.before || 'Not set'}</strong>
+                            </div>
+                            <div className="text-blue-800">
+                              After: <strong>{areaDates[area.id]?.after || 'Not set'}</strong>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Date Range Selection */}
@@ -1603,8 +1681,20 @@ const MapViewPage: React.FC = () => {
                               <label className="text-xs text-gray-600">Before:</label>
                               <input
                                 type="date"
-                                value={areaBeforeDate}
-                                onChange={(e) => setAreaBeforeDate(e.target.value)}
+                                value={areaDates[area.id]?.before || ''}
+                                max="2025-12-31"
+                                onChange={(e) => {
+                                  const newValue = e.target.value;
+                                  console.log('Before date changed:', newValue);
+                                  setAreaDates(prev => ({
+                                    ...prev,
+                                    [area.id]: {
+                                      before: newValue,
+                                      after: prev[area.id]?.after || ''
+                                    }
+                                  }));
+                                }}
+                                placeholder="Select before date"
                                 className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
                               />
                             </div>
@@ -1612,8 +1702,20 @@ const MapViewPage: React.FC = () => {
                               <label className="text-xs text-gray-600">After:</label>
                               <input
                                 type="date"
-                                value={areaAfterDate}
-                                onChange={(e) => setAreaAfterDate(e.target.value)}
+                                value={areaDates[area.id]?.after || ''}
+                                max="2025-12-31"
+                                onChange={(e) => {
+                                  const newValue = e.target.value;
+                                  console.log('After date changed:', newValue);
+                                  setAreaDates(prev => ({
+                                    ...prev,
+                                    [area.id]: {
+                                      before: prev[area.id]?.before || '',
+                                      after: newValue
+                                    }
+                                  }));
+                                }}
+                                placeholder="Select after date"
                                 className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
                               />
                             </div>
@@ -1632,6 +1734,17 @@ const MapViewPage: React.FC = () => {
 
                       {/* Action Buttons */}
                       <div className="mt-2 space-y-2">
+                        {/* Show selected dates prominently */}
+                        {areaDates[area.id]?.before && areaDates[area.id]?.after && (
+                          <div className="px-3 py-2 bg-green-50 border border-green-200 rounded text-xs">
+                            <div className="font-semibold text-green-800 mb-1">✓ Dates Selected:</div>
+                            <div className="text-green-700">
+                              Before: <strong>{areaDates[area.id].before}</strong><br/>
+                              After: <strong>{areaDates[area.id].after}</strong>
+                            </div>
+                          </div>
+                        )}
+                        
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1639,16 +1752,7 @@ const MapViewPage: React.FC = () => {
                               setShowDatePicker(null);
                             } else {
                               setShowDatePicker(area.id);
-                              // Set default dates if not set
-                              if (!areaAfterDate) {
-                                const today = new Date();
-                                setAreaAfterDate(today.toISOString().split('T')[0]);
-                              }
-                              if (!areaBeforeDate) {
-                                const twoMonthsAgo = new Date();
-                                twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-                                setAreaBeforeDate(twoMonthsAgo.toISOString().split('T')[0]);
-                              }
+                              // NO default dates - user must select manually
                             }
                           }}
                           className="w-full px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
@@ -1660,14 +1764,19 @@ const MapViewPage: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            console.log('RUN DETECTION CLICKED - Area ID:', area.id);
+                            console.log('Current dates for this area:', areaDates[area.id]);
                             runDetectionOnArea(area.id);
                           }}
-                          disabled={areaDetectionRunning}
+                          disabled={areaDetectionRunning || !areaDates[area.id]?.before || !areaDates[area.id]?.after}
                           className={`w-full px-3 py-2 text-sm rounded transition-colors flex items-center justify-center gap-2 ${
                             areaDetectionRunning 
                               ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                              : (!areaDates[area.id]?.before || !areaDates[area.id]?.after)
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                               : 'bg-emerald-600 text-white hover:bg-emerald-700'
                           }`}
+                          title={(!areaDates[area.id]?.before || !areaDates[area.id]?.after) ? 'Please select date range first' : `Run detection: ${areaDates[area.id]?.before} to ${areaDates[area.id]?.after}`}
                         >
                           {areaDetectionRunning ? (
                             <>
@@ -1680,13 +1789,65 @@ const MapViewPage: React.FC = () => {
                           ) : (
                             <>
                               <Play className="h-4 w-4" />
-                              Run Detection Now
+                              {areaDates[area.id]?.before && areaDates[area.id]?.after 
+                                ? 'Run Detection Now' 
+                                : 'Select Dates First'}
                             </>
                           )}
                         </button>
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Error Display Section */}
+            {areaError && (
+              <div className="mt-6 bg-red-50 border-2 border-red-300 rounded-lg p-4 shadow-md">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="font-bold text-red-900 mb-2 flex items-center gap-2">
+                      <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
+                      </svg>
+                      Detection Error
+                    </h3>
+                    <p className="text-red-800 text-sm whitespace-pre-wrap">{areaError}</p>
+                    <div className="mt-3 text-xs text-red-700 bg-red-100 p-2 rounded">
+                      <strong>Troubleshooting Tips:</strong>
+                      <ul className="list-disc ml-4 mt-1 space-y-1">
+                        <li>Verify the date range - make sure "Before" date is earlier than "After" date</li>
+                        <li>Check browser console (F12) for detailed error messages</li>
+                        <li>Check if there's sufficient satellite imagery for the selected dates and area</li>
+                        <li>Cloud cover may be too high for the selected period (try adjusting dates)</li>
+                        <li>Try selecting a different date range with less cloud coverage</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setAreaError(null)}
+                    className="ml-4 text-red-600 hover:text-red-800 font-bold text-xl"
+                    title="Dismiss error"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {/* Loading Indicator - More Prominent */}
+            {areaDetectionRunning && (
+              <div className="mt-6 bg-blue-50 border-2 border-blue-300 rounded-lg p-6 shadow-md">
+                <div className="flex items-center justify-center gap-4">
+                  <svg className="animate-spin h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <div>
+                    <div className="text-lg font-semibold text-blue-900">Running Detection...</div>
+                    <div className="text-sm text-blue-700">This may take 30-60 seconds. Please wait.</div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1702,7 +1863,7 @@ const MapViewPage: React.FC = () => {
                     ? 'bg-red-50 border border-red-200' 
                     : 'bg-green-50 border border-green-200'
                 }`}>
-                  <div className="text-lg font-semibold mb-2 ${areaDetectionResult.deforestation_detected ? 'text-red-700' : 'text-green-700'}">
+                  <div className={`text-lg font-semibold mb-2 ${areaDetectionResult.deforestation_detected ? 'text-red-700' : 'text-green-700'}`}>
                     {areaDetectionResult.deforestation_detected ? '⚠️ Deforestation Detected' : '✅ No Deforestation Detected'}
                   </div>
                   

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Direct API Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        .box { background: #2d2d2d; padding: 15px; margin: 10px 0; border-radius: 5px; border: 1px solid #404040; }
+        .success { border-color: #4caf50; }
+        .error { border-color: #f44336; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #007acc; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #005a9e; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        .label { color: #4ec9b0; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Direct API Date Test</h1>
+    
+    <div class="box">
+        <h2>Test Configuration</h2>
+        <div><span class="label">Area ID:</span> 80aa81c2-a728-4524-867a-061475d9c251</div>
+        <div><span class="label">Before Date:</span> <input type="date" id="beforeDate" value="2023-06-01"></div>
+        <div><span class="label">After Date:</span> <input type="date" id="afterDate" value="2023-08-01"></div>
+        <br>
+        <button onclick="runTest()">🚀 Run Test</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        async function runTest() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="box"><h2>⏳ Running test...</h2></div>';
+            
+            const beforeDate = document.getElementById('beforeDate').value;
+            const afterDate = document.getElementById('afterDate').value;
+            const areaId = '80aa81c2-a728-4524-867a-061475d9c251';
+            const url = `http://127.0.0.1:8001/api/monitored-areas/${areaId}/detect`;
+            
+            const payload = {
+                before_date: beforeDate,
+                after_date: afterDate
+            };
+            
+            let html = '<div class="box"><h2>📤 Request Details</h2>';
+            html += `<div><span class="label">URL:</span> ${url}</div>`;
+            html += `<div><span class="label">Method:</span> POST</div>`;
+            html += `<div><span class="label">Headers:</span> Content-Type: application/json</div>`;
+            html += `<div><span class="label">Body:</span></div>`;
+            html += `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+            html += '</div>';
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const endTime = Date.now();
+                
+                html += `<div class="box ${response.ok ? 'success' : 'error'}"><h2>📥 Response</h2>`;
+                html += `<div><span class="label">Status:</span> ${response.status} ${response.statusText}</div>`;
+                html += `<div><span class="label">Time:</span> ${endTime - startTime}ms</div>`;
+                
+                const text = await response.text();
+                let responseData;
+                try {
+                    responseData = JSON.parse(text);
+                    html += `<div><span class="label">Body:</span></div>`;
+                    html += `<pre>${JSON.stringify(responseData, null, 2)}</pre>`;
+                    
+                    // Check what dates the backend actually used
+                    if (responseData.error && responseData.error.includes('2026-02-04')) {
+                        html += `<div style="color: #f44336; margin-top: 10px;">`;
+                        html += `❌ <strong>PROBLEM DETECTED:</strong> Backend is using today's date (2026-02-04) instead of your custom date (${beforeDate})!`;
+                        html += `<br>This means the request body was NOT received by the backend.`;
+                        html += `</div>`;
+                    } else if (responseData.error && responseData.error.includes(beforeDate)) {
+                        html += `<div style="color: #4caf50; margin-top: 10px;">`;
+                        html += `✅ <strong>GOOD:</strong> Backend received your custom dates correctly!`;
+                        html += `<br>The error is about image availability, not date passing.`;
+                        html += `</div>`;
+                    }
+                } catch (e) {
+                    html += `<div><span class="label">Raw Response:</span></div>`;
+                    html += `<pre>${text}</pre>`;
+                }
+                
+                html += '</div>';
+                
+            } catch (error) {
+                html += `<div class="box error"><h2>❌ Error</h2>`;
+                html += `<pre>${error.message}</pre>`;
+                html += '</div>';
+            }
+            
+            resultsDiv.innerHTML = html;
+        }
+        
+        // Auto-run on load
+        window.addEventListener('load', () => {
+            console.log('Test page loaded. Click the button to test the API.');
+        });
+    </script>
+</body>
+</html>

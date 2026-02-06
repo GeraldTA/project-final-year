@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Deforestation Detection API", version="1.0.0")
 
-from src.ml.api_integration import ml_router, initialize_ml_system
+from src.ml.api_integration import ml_router, initialize_ml_system, detect_change_auto_internal
 
 # Allow frontend to access API
 app.add_middleware(
@@ -1101,7 +1101,7 @@ async def analyze_location(request: Request):
         logger.info(f"Analyzing location: {location_name} ({latitude}, {longitude})")
         
         # Import ML detection function
-        from src.ml.api_integration import detect_change_auto
+        from src.ml.api_integration import detect_change_auto_internal
         from datetime import datetime, timedelta
         
         # Get dates (use last 60 days as default)
@@ -1122,7 +1122,7 @@ async def analyze_location(request: Request):
             north = latitude + 0.02
         
         # Run ML detection
-        result = await detect_change_auto(
+        result = await detect_change_auto_internal(
             before_date=before_date,
             after_date=after_date,
             west=west,
@@ -1287,8 +1287,15 @@ async def run_detection_on_area(area_id: str, request: Request):
                 "error": "Area not found"
             }, status_code=404)
         
-        # Get request params
-        params = await request.json() if request.method == "POST" else {}
+        # Get request body
+        try:
+            body_bytes = await request.body()
+            logger.info(f"Raw request body bytes: {body_bytes}")
+            params = json.loads(body_bytes) if body_bytes else {}
+            logger.info(f"Parsed JSON params: {params}")
+        except Exception as e:
+            logger.error(f"Failed to parse request body: {e}")
+            params = {}
         
         # Calculate center point from polygon coordinates
         coords = area["coordinates"]
@@ -1306,21 +1313,24 @@ async def run_detection_on_area(area_id: str, request: Request):
         }
         
         logger.info(f"Running ML detection on area: {area['name']} (center: {center_lat}, {center_lng})")
+        logger.info(f"Area ID: {area_id}")
+        logger.info(f"Received params: {params}")
+        logger.info(f"Params type: {type(params)}")
+        logger.info(f"Params keys: {params.keys() if params else 'None'}")
         
-        # Import the detect_change_auto function and call it directly
-        from src.ml.api_integration import detect_change_auto
-        from datetime import datetime, timedelta
-        from fastapi import Query
+        # Get dates from params - check both snake_case and camelCase
+        before_date = params.get("before_date") or params.get("beforeDate") if params else None
+        after_date = params.get("after_date") or params.get("afterDate") if params else None
         
-        # Get dates (use last 60 days as default)
-        after_date = datetime.now().strftime("%Y-%m-%d")
-        before_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        logger.info(f"Extracted before_date: {before_date}, after_date: {after_date}")
         
-        # Override with user-provided dates if available
-        if params.get("before_date"):
-            before_date = params["before_date"]
-        if params.get("after_date"):
-            after_date = params["after_date"]
+        # REQUIRE dates to be provided
+        if not before_date or not after_date:
+            error_msg = "Both before_date and after_date are required. Please select dates in the UI."
+            logger.error(error_msg)
+            return JSONResponse({
+                "error": error_msg
+            }, status_code=400)
         
         # Calculate buffer around polygon to create reasonable bounds
         lat_buffer = 0.02  # ~2km
@@ -1331,8 +1341,10 @@ async def run_detection_on_area(area_id: str, request: Request):
         south = bounds["min_lat"] - lat_buffer
         north = bounds["max_lat"] + lat_buffer
         
+        logger.info(f"Calling detect_change_auto_internal with dates: {before_date} to {after_date}")
+        
         # Call the ML detection function with proper parameters
-        result = await detect_change_auto(
+        result = await detect_change_auto_internal(
             before_date=before_date,
             after_date=after_date,
             west=west,

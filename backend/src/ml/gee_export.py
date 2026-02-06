@@ -171,7 +171,12 @@ def export_s2_10band_geotiff(
         raise RuntimeError(f"Failed querying Earth Engine collection: {e}")
 
     if size == 0:
-        raise ValueError(f"No Sentinel-2 images found for {start_date}..{end_date} under cloud<{max_cloud_cover}%")
+        raise ValueError(
+            f"No Sentinel-2 images found in date range {start_date} to {end_date} "
+            f"with cloud cover < {max_cloud_cover}%. "
+            f"Try: (1) expanding the date range, (2) increasing max_cloud_cover, or "
+            f"(3) choosing a different time period with more satellite coverage."
+        )
 
     # Use median composite for stability.
     composite = collection.median().clip(roi).select(list(S2_10BAND_GEE_BANDS))

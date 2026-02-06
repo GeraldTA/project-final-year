@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Test API Date Passing</h1>
+    <button id="test-btn">Send Test Request</button>
+    <div id="result" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc;"></div>
+
+    <script>
+        document.getElementById('test-btn').addEventListener('click', async () => {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Sending request...';
+            
+            const areaId = '80aa81c2-a728-4524-867a-061475d9c251';
+            const requestBody = {
+                before_date: '2024-01-01',
+                after_date: '2024-02-01'
+            };
+            
+            console.log('Request URL:', `/api/monitored-areas/${areaId}/detect`);
+            console.log('Request Body:', JSON.stringify(requestBody, null, 2));
+            
+            try {
+                const response = await fetch(`/api/monitored-areas/${areaId}/detect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                console.log('Response Status:', response.status);
+                console.log('Response OK:', response.ok);
+                
+                const data = await response.json();
+                console.log('Response Data:', data);
+                
+                resultDiv.innerHTML = `
+                    <h3>Response Status: ${response.status}</h3>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `<h3 style="color: red;">Error: ${error.message}</h3>`;
+            }
+        });
+    </script>
+</body>
+</html>
