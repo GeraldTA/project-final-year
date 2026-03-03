@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { RefreshCw, Calendar, Search, Eye, Pencil, Trash2, Play } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { apiFetch, apiUrl } from '../utils/api';
 import InteractiveMap from '../components/InteractiveMap';
+import { MonitoringTimeline } from '../components/MonitoringTimeline';
 
 const MapViewPage: React.FC = () => {
-  const { alerts, detectionData, selectedRegion } = useData();
+  const {} = useData();
+  const location = useLocation();
+  const [focusAreaId, setFocusAreaId] = useState<string | null>(null);
+  const [hotspots, setHotspots] = useState<any[]>([]);
   const [mapLayer, setMapLayer] = useState<'satellite' | 'thermal' | 'ndvi'>('satellite');
   const [zoom, setZoom] = useState(12);
   const [showDetections, setShowDetections] = useState(true);
@@ -20,7 +25,7 @@ const MapViewPage: React.FC = () => {
   const [selectedLocation, setSelectedLocation] = useState<any>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [mapError, setMapError] = useState(false);
-  const [mlStatus, setMlStatus] = useState<{ model_loaded: boolean; model_type?: string; pretrained_repo?: string } | null>(null);
+  const [mlStatus, setMlStatus] = useState<{ model_loaded: boolean; ml_loading?: boolean; model_type?: string; pretrained_repo?: string } | null>(null);
   const [mlStatusError, setMlStatusError] = useState<string | null>(null);
   const [mlAutoRunning, setMlAutoRunning] = useState(false);
   const [mlAutoResult, setMlAutoResult] = useState<any>(null);
@@ -48,7 +53,7 @@ const MapViewPage: React.FC = () => {
   } | null>(null);
 
   // New states for monitored areas
-  const [useInteractiveMap, setUseInteractiveMap] = useState(false);
+  const [useInteractiveMap, setUseInteractiveMap] = useState(true);
   const [monitoredAreas, setMonitoredAreas] = useState<any[]>([]);
   const [drawnCoordinates, setDrawnCoordinates] = useState<[number, number][] | null>(null);
   const [showSaveAreaDialog, setShowSaveAreaDialog] = useState(false);
@@ -60,6 +65,20 @@ const MapViewPage: React.FC = () => {
   const [areaDates, setAreaDates] = useState<{ [key: string]: { before: string; after: string } }>({});
   const [showDatePicker, setShowDatePicker] = useState<string | null>(null);
   const [areaError, setAreaError] = useState<string | null>(null);
+
+  // Auto-scan states
+  const [autoScanRunning, setAutoScanRunning] = useState(false);
+  const [autoScanAlerts, setAutoScanAlerts] = useState<any[]>([]);
+  const [autoScanErrors, setAutoScanErrors] = useState<any[]>([]);
+  const [autoScanMessage, setAutoScanMessage] = useState<string | null>(null);
+  const [autoScanDone, setAutoScanDone] = useState(false);
+  const [autoScanScanned, setAutoScanScanned] = useState(0);
+  // SSE progress tracking
+  const [autoScanTotal, setAutoScanTotal] = useState(0);
+  const [autoScanCurrentIndex, setAutoScanCurrentIndex] = useState(0);
+  const [autoScanCurrentArea, setAutoScanCurrentArea] = useState<string | null>(null);
+  type AreaResult = { name: string; status: 'pending' | 'scanning' | 'ok' | 'deforested' | 'error' | 'skipped'; error?: string; lossPercent?: number; daysUntilNext?: number; lastScanned?: string };
+  const [autoScanAreaResults, setAutoScanAreaResults] = useState<AreaResult[]>([]);
 
   const fetchMlStatus = async () => {
     try {
@@ -74,8 +93,104 @@ const MapViewPage: React.FC = () => {
     }
   };
 
+  // Auto-poll every 5 s while the model is still loading
+  useEffect(() => {
+    if (!mlStatus?.ml_loading) return;
+    const timer = setTimeout(fetchMlStatus, 5000);
+    return () => clearTimeout(timer);
+  }, [mlStatus]);
+
   useEffect(() => {
     fetchMlStatus();
+  }, []);
+
+  const runAutoScan = async () => {
+    // Reset all scan state
+    setAutoScanRunning(true);
+    setAutoScanDone(false);
+    setAutoScanAlerts([]);
+    setAutoScanErrors([]);
+    setAutoScanMessage(null);
+    setAutoScanScanned(0);
+    setAutoScanTotal(0);
+    setAutoScanCurrentIndex(0);
+    setAutoScanCurrentArea(null);
+    setAutoScanAreaResults([]);
+
+    try {
+      const res = await fetch(apiUrl('/api/monitored-areas/auto-scan-progress'));
+      if (!res.ok || !res.body) throw new Error(`Auto-scan stream failed (${res.status})`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          let event: any;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === 'start') {
+            setAutoScanTotal(event.total ?? 0);
+            setAutoScanAreaResults(
+              (event.area_names ?? []).map((n: string) => ({ name: n, status: 'pending' as const }))
+            );
+          } else if (event.type === 'scanning') {
+            setAutoScanCurrentIndex((event.index ?? 0) + 1); // 1-based for display
+            setAutoScanCurrentArea(event.area_name ?? null);
+            setAutoScanAreaResults(prev =>
+              prev.map(r => r.name === event.area_name ? { ...r, status: 'scanning' as const } : r)
+            );
+          } else if (event.type === 'result') {
+            setAutoScanAreaResults(prev =>
+              prev.map(r => r.name === event.area_name
+                ? {
+                    ...r,
+                    status: event.skipped ? 'skipped' as const
+                          : event.error   ? 'error' as const
+                          : event.deforestation_detected ? 'deforested' as const
+                          : 'ok' as const,
+                    error: event.error ?? undefined,
+                    lossPercent: event.forest_loss_percent ?? undefined,
+                    daysUntilNext: event.days_until_next ?? undefined,
+                    lastScanned: event.last_scanned ?? undefined,
+                  }
+                : r
+              )
+            );
+          } else if (event.type === 'done') {
+            setAutoScanAlerts(event.alerts || []);
+            setAutoScanErrors(event.errors || []);
+            setAutoScanScanned(event.scanned ?? 0);
+            setAutoScanMessage(event.message || null);
+          } else if (event.type === 'error') {
+            setAutoScanMessage(`Auto-scan error: ${event.message}`);
+          }
+        }
+      }
+
+      await fetchMonitoredAreas();
+    } catch (e: any) {
+      setAutoScanMessage(`Auto-scan error: ${e?.message}`);
+    } finally {
+      setAutoScanRunning(false);
+      setAutoScanDone(true);
+      setAutoScanCurrentArea(null);
+    }
+  };
+
+  // Trigger auto-scan on page load (after a short delay for ML init)
+  useEffect(() => {
+    const t = setTimeout(runAutoScan, 3000);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keyboard shortcuts for zoom modal
@@ -400,12 +515,47 @@ const MapViewPage: React.FC = () => {
       const res = await apiFetch('/api/monitored-areas');
       if (res.ok) {
         const data = await res.json();
-        setMonitoredAreas(data.areas || []);
+        const areas = data.areas || [];
+        setMonitoredAreas(areas);
+
+        // If we arrived from Flagged Areas with a specific area, auto-select it
+        const incomingId = (location.state as any)?.selectedAreaId;
+        if (incomingId) {
+          const target = areas.find((a: any) => a.id === incomingId);
+          if (target) {
+            setUseInteractiveMap(true);
+            setSelectedMonitoredArea(target);
+            setFocusAreaId(incomingId);
+            // Clear state so re-renders don’t re-focus
+            window.history.replaceState({}, '');
+          }
+        }
       }
     } catch (e) {
       console.error('Failed to fetch monitored areas:', e);
     }
   };
+
+  useEffect(() => {
+    // Always fetch monitored areas on mount
+    fetchMonitoredAreas();
+  }, []);
+
+  // When areas load, fetch hotspots for every area and merge them all into one list
+  // so ALL deforestation markers are visible on the map immediately
+  useEffect(() => {
+    if (monitoredAreas.length === 0) return;
+    Promise.all(
+      monitoredAreas.map(area =>
+        apiFetch(`/api/monitored-areas/${area.id}/hotspots`)
+          .then(r => r.json())
+          .then(d => (d.hotspots || []) as any[])
+          .catch(() => [] as any[])
+      )
+    ).then(results => {
+      setHotspots(results.flat());
+    });
+  }, [monitoredAreas]);
 
   useEffect(() => {
     if (useInteractiveMap) {
@@ -425,6 +575,11 @@ const MapViewPage: React.FC = () => {
     }
 
     try {
+      console.log('=== SAVING MONITORED AREA ===');
+      console.log('Name:', newAreaName);
+      console.log('Description:', newAreaDescription);
+      console.log('Coordinates:', drawnCoordinates);
+      
       const res = await apiFetch('/api/monitored-areas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -437,21 +592,34 @@ const MapViewPage: React.FC = () => {
         })
       });
 
+      console.log('Response status:', res.status);
+      
       if (res.ok) {
         const data = await res.json();
+        console.log('Saved area:', data);
         setMonitoredAreas(prev => [...prev, data.area]);
         setShowSaveAreaDialog(false);
         setNewAreaName('');
         setNewAreaDescription('');
         setDrawnCoordinates(null);
         alert(`✅ Area "${data.area.name}" saved successfully!`);
+        // Refresh the list to ensure we have latest data
+        await fetchMonitoredAreas();
       } else {
-        const error = await res.json();
-        alert(`Failed to save area: ${error.error}`);
+        const errorText = await res.text();
+        console.error('Save failed:', res.status, errorText);
+        let errorMessage = 'Failed to save area';
+        try {
+          const error = JSON.parse(errorText);
+          errorMessage = error.detail || error.error || error.message || errorMessage;
+        } catch (e) {
+          errorMessage = errorText || errorMessage;
+        }
+        alert(`Failed to save area: ${errorMessage}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error saving monitored area:', e);
-      alert('Failed to save monitored area. Please try again.');
+      alert(`Failed to save monitored area: ${e.message || 'Unknown error'}. Check console for details.`);
     }
   };
 
@@ -576,6 +744,61 @@ const MapViewPage: React.FC = () => {
     if (area) {
       setSelectedMonitoredArea(area);
       setAreaDetectionResult(null);
+      setFocusAreaId(areaId);
+    }
+  };
+
+  const startActiveMonitoring = async (areaId: string) => {
+    try {
+      const res = await apiFetch(`/api/monitored-areas/${areaId}/active-monitoring/start`, {
+        method: 'POST'
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        // Update the area in the list
+        setMonitoredAreas(prev => prev.map(a => 
+          a.id === areaId ? data.area : a
+        ));
+        // Update selected area if it's this one
+        if (selectedMonitoredArea?.id === areaId) {
+          setSelectedMonitoredArea(data.area);
+        }
+        alert(`Active monitoring started for ${data.area.name}!\n\nThe system will automatically run detection every 5 days.`);
+      } else {
+        const error = await res.json();
+        alert(`Failed to start monitoring: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      console.error('Error starting active monitoring:', e);
+      alert(`Error: ${e.message}`);
+    }
+  };
+
+  const stopActiveMonitoring = async (areaId: string) => {
+    try {
+      const res = await apiFetch(`/api/monitored-areas/${areaId}/active-monitoring/stop`, {
+        method: 'POST'
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        // Update the area in the list
+        setMonitoredAreas(prev => prev.map(a => 
+          a.id === areaId ? data.area : a
+        ));
+        // Update selected area if it's this one
+        if (selectedMonitoredArea?.id === areaId) {
+          setSelectedMonitoredArea(data.area);
+        }
+        alert(`Active monitoring stopped for ${data.area.name}`);
+      } else {
+        const error = await res.json();
+        alert(`Failed to stop monitoring: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      console.error('Error stopping active monitoring:', e);
+      alert(`Error: ${e.message}`);
     }
   };
 
@@ -606,10 +829,6 @@ const MapViewPage: React.FC = () => {
     }
   };
 
-  const filteredAlerts = alerts.filter(alert => {
-    if (severityFilter === 'all') return true;
-    return alert.severity === severityFilter;
-  });
 
   // (Navigation retained for other pages; map markers are rendered server-side in the iframe.)
 
@@ -641,7 +860,8 @@ const MapViewPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Satellite Map View</h1>
           <p className="text-gray-600">
-            Interactive monitoring of {selectedRegion} region • {filteredAlerts.length} detections shown
+            {monitoredAreas.filter((a: any) => a.active_monitoring).length} area(s) under active monitoring
+            {monitoredAreas.length > 0 ? ` • ${monitoredAreas.length} total area(s) defined` : ''}
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -650,12 +870,20 @@ const MapViewPage: React.FC = () => {
               <span className="font-medium">ML</span>
               {mlStatus?.model_loaded ? (
                 <span className="text-emerald-700">Online</span>
+              ) : mlStatus?.ml_loading ? (
+                <span className="text-blue-600 animate-pulse">Loading...</span>
               ) : (
                 <span className="text-amber-700">Offline</span>
               )}
             </div>
             <div className="text-xs text-gray-500">
-              {mlStatus?.model_type || (mlStatusError ? mlStatusError : 'Checking...')}
+              {mlStatus?.model_loaded
+                ? mlStatus.model_type
+                : mlStatus?.ml_loading
+                ? 'Downloading model weights…'
+                : mlStatusError
+                ? 'Backend not running'
+                : 'Checking...'}
             </div>
           </div>
           <button
@@ -691,6 +919,169 @@ const MapViewPage: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {/* Auto-scan progress panel */}
+      {autoScanRunning && (
+        <div className="mb-4 bg-blue-50 border border-blue-300 rounded-xl overflow-hidden shadow">
+          {/* Header */}
+          <div className="bg-blue-600 text-white px-5 py-3 flex items-center gap-3">
+            <svg className="animate-spin h-5 w-5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+            <span className="font-bold text-lg">🛰️ Auto-Scan in Progress</span>
+            {autoScanTotal > 0 && (
+              <span className="ml-auto text-blue-200 text-sm">
+                {autoScanCurrentIndex} / {autoScanTotal} areas
+              </span>
+            )}
+          </div>
+
+          <div className="p-4 space-y-3">
+            {/* Progress bar */}
+            {autoScanTotal > 0 && (
+              <div className="space-y-1">
+                <div className="w-full bg-blue-200 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.round((autoScanCurrentIndex / autoScanTotal) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-blue-700">
+                  {Math.round((autoScanCurrentIndex / autoScanTotal) * 100)}% complete
+                </p>
+              </div>
+            )}
+
+            {/* Current area label */}
+            {autoScanCurrentArea && (
+              <p className="text-sm text-blue-900 font-medium">
+                📡 Scanning <span className="font-bold">{autoScanCurrentArea}</span>…
+              </p>
+            )}
+
+            {/* Per-area result list */}
+            {autoScanAreaResults.length > 0 && (
+              <ul className="divide-y divide-blue-100 border border-blue-200 rounded-lg overflow-hidden">
+                {autoScanAreaResults.map((r, i) => (
+                  <li key={i} className={`flex items-center justify-between px-3 py-1.5 text-sm ${
+                    r.status === 'scanning'    ? 'bg-blue-100' :
+                    r.status === 'deforested' ? 'bg-red-50' :
+                    r.status === 'ok'          ? 'bg-green-50' :
+                    r.status === 'error'       ? 'bg-amber-50' :
+                    r.status === 'skipped'     ? 'bg-green-50' :
+                    'bg-white'
+                  }`}>
+                    <span className="flex items-center gap-2">
+                      {r.status === 'pending'    && <span className="text-gray-400">⏳</span>}
+                      {r.status === 'scanning'   && (
+                        <svg className="animate-spin h-3.5 w-3.5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                        </svg>
+                      )}
+                      {r.status === 'ok'         && <span className="text-green-600">✅</span>}
+                      {r.status === 'deforested' && <span className="text-red-600">⚠️</span>}
+                      {r.status === 'error'       && <span className="text-amber-600">❌</span>}
+                      {r.status === 'skipped'    && <span className="text-green-500">✓</span>}
+                      <span className={`font-medium ${
+                        r.status === 'scanning'   ? 'text-blue-800' :
+                        r.status === 'deforested' ? 'text-red-800' :
+                        r.status === 'ok'         ? 'text-green-800' :
+                        r.status === 'error'      ? 'text-amber-800' :
+                        r.status === 'skipped'    ? 'text-green-700' :
+                        'text-gray-500'
+                      }`}>{r.name}</span>
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {r.status === 'scanning'   && 'scanning…'}
+                      {r.status === 'ok'         && 'Clean'}
+                      {r.status === 'deforested' && `${r.lossPercent !== undefined ? r.lossPercent.toFixed(1) + '% loss' : 'Detected'}`}
+                      {r.status === 'error'      && 'No imagery'}
+                      {r.status === 'skipped'    && (
+                        r.daysUntilNext !== undefined
+                          ? (r.daysUntilNext <= 1 ? 'Up to date — scan tomorrow' : `Up to date — next scan in ${r.daysUntilNext}d`)
+                          : 'Up to date'
+                      )}
+                      {r.status === 'pending'    && 'Waiting…'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+      {!autoScanRunning && autoScanAlerts.length > 0 && (
+        <div className="mb-4 bg-red-50 border-2 border-red-400 rounded-xl overflow-hidden shadow-lg">
+          <div className="bg-red-600 text-white px-5 py-3 flex items-center justify-between">
+            <span className="font-bold text-lg">⚠️ NEW DEFORESTATION DETECTED</span>
+            <button onClick={() => setAutoScanAlerts([])} className="text-white opacity-70 hover:opacity-100 text-2xl leading-none">×</button>
+          </div>
+          <div className="p-4 space-y-2">
+            {autoScanAlerts.map((alert: any, i: number) => (
+              <div key={i} className="bg-white border border-red-200 rounded-lg p-3 flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-red-800">{alert.area_name}</span>
+                  <span className="ml-2 text-sm text-gray-600">{alert.before_date} → {alert.after_date}</span>
+                  <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                    alert.severity === 'critical' ? 'bg-red-900 text-white' :
+                    alert.severity === 'high'     ? 'bg-red-600 text-white' :
+                    alert.severity === 'medium'   ? 'bg-orange-500 text-white' :
+                                                    'bg-yellow-400 text-gray-900'
+                  }`}>{String(alert.severity).toUpperCase()}</span>
+                </div>
+                <div className="text-right">
+                  <div className="text-red-700 font-bold">{Number(alert.forest_loss_percent).toFixed(1)}% forest lost</div>
+                  <button
+                    onClick={() => { setFocusAreaId(alert.area_id); setAutoScanAlerts([]); }}
+                    className="text-xs text-indigo-600 hover:underline"
+                  >View on map →</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {!autoScanRunning && autoScanDone && autoScanAlerts.length === 0 && autoScanMessage && (
+        <div className={`mb-4 rounded-xl p-3 flex flex-wrap items-start gap-2 ${
+          autoScanErrors.length > 0 && autoScanScanned === 0
+            ? 'bg-amber-50 border border-amber-300'
+            : 'bg-green-50 border border-green-300'
+        }`}>
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-medium ${
+              autoScanErrors.length > 0 && autoScanScanned === 0 ? 'text-amber-800' : 'text-green-800'
+            }`}>{autoScanMessage}</p>
+            {autoScanErrors.length > 0 && (
+              <details className="mt-1">
+                <summary className="text-xs text-amber-700 cursor-pointer hover:underline">
+                  {autoScanErrors.length} area(s) could not be scanned — click to see why
+                </summary>
+                <ul className="mt-1 space-y-0.5">
+                  {autoScanErrors.map((err: any, i: number) => (
+                    <li key={i} className="text-xs text-amber-900">
+                      <span className="font-medium">{err.area}:</span>{' '}
+                      {err.error?.includes('No Sentinel-2 images') ? 'No cloud-free imagery available for this period' : err.error}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+          <div className="flex gap-2 items-center flex-shrink-0">
+            {autoScanErrors.length > 0 && autoScanScanned === 0 && (
+              <button
+                onClick={runAutoScan}
+                className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium"
+              >
+                🔄 Retry Scan
+              </button>
+            )}
+            <button onClick={() => setAutoScanMessage(null)} className="text-gray-500 hover:text-gray-700 text-lg leading-none">×</button>
+          </div>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="bg-white rounded-lg shadow-sm p-4">
@@ -1461,39 +1852,69 @@ const MapViewPage: React.FC = () => {
       </div>
 
       {/* Real Detection Statistics Banner */}
-      {detectionData && (
-        <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="bg-emerald-600 text-white p-2 rounded-lg">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                </svg>
+      {monitoredAreas.length > 0 && (() => {
+        const activeAreas = monitoredAreas.filter((a: any) => a.active_monitoring);
+        const allDetections = monitoredAreas.flatMap((a: any) => a.detection_history || []);
+        const deforestationEvents = allDetections.filter((d: any) => d.deforestation_detected);
+        const areasWithDeforestation = monitoredAreas.filter((a: any) =>
+          (a.detection_history || []).some((d: any) => d.deforestation_detected)
+        );
+        const lastScan = allDetections
+          .map((d: any) => d.timestamp || d.after_date || '')
+          .filter(Boolean)
+          .sort()
+          .at(-1);
+        const lastScanLabel = lastScan
+          ? new Date(lastScan).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+          : 'Never';
+
+        return (
+          <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-lg p-4">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center space-x-4">
+                <div className="bg-emerald-600 text-white p-2 rounded-lg flex-shrink-0">
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">🛰️ Sentinel-2 Satellite Monitoring</h3>
+                  <p className="text-sm text-gray-600">
+                    {activeAreas.length} area{activeAreas.length !== 1 ? 's' : ''} under active monitoring
+                    {lastScan ? ` · Last scan: ${lastScanLabel}` : ''}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">🛰️ Real Sentinel-2 Satellite Detection</h3>
-                <p className="text-sm text-gray-600">
-                  Showing {filteredAlerts.length} detected deforestation sites from Google Earth Engine NDVI analysis
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-6 text-sm">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-emerald-700">{detectionData.activeIncidents.toLocaleString()}</div>
-                <div className="text-xs text-gray-600">Total Detections</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-red-600">{detectionData.deforestedArea.toLocaleString()}</div>
-                <div className="text-xs text-gray-600">Hectares Affected</div>
-              </div>
-              <div className="text-center px-3 py-2 bg-green-100 rounded-lg">
-                <div className="text-xs font-semibold text-green-800">✓ LIVE DATA</div>
-                <div className="text-xs text-green-700">Real Analysis</div>
+              <div className="flex items-center space-x-5 text-sm flex-wrap gap-y-2">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-700">{activeAreas.length}</div>
+                  <div className="text-xs text-gray-600">Areas Monitored</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-700">{allDetections.length}</div>
+                  <div className="text-xs text-gray-600">Total Scans</div>
+                </div>
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${deforestationEvents.length > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                    {deforestationEvents.length}
+                  </div>
+                  <div className="text-xs text-gray-600">Deforestation Events</div>
+                </div>
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${areasWithDeforestation.length > 0 ? 'text-orange-600' : 'text-emerald-700'}`}>
+                    {areasWithDeforestation.length}
+                  </div>
+                  <div className="text-xs text-gray-600">Areas Flagged</div>
+                </div>
+                <div className="text-center px-3 py-2 bg-green-100 rounded-lg">
+                  <div className="text-xs font-semibold text-green-800">✓ LIVE DATA</div>
+                  <div className="text-xs text-green-700">Your Areas</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Backend Map Integration */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden mb-8">
@@ -1551,253 +1972,145 @@ const MapViewPage: React.FC = () => {
               existingAreas={monitoredAreas}
               onAreaClick={handleAreaClick}
               drawingEnabled={true}
+              focusAreaId={focusAreaId}
+              hotspots={hotspots}
             />
 
-            {/* Deforestation Alerts */}
-            {monitoredAreas.filter(a => a.detection_count > 0 && a.alert_enabled !== false).length > 0 && (
-              <div className="mt-6 bg-red-50 border-2 border-red-300 rounded-lg p-4">
-                <h3 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
-                  <span className="text-xl">🚨</span>
-                  Deforestation Alerts ({monitoredAreas.filter(a => a.detection_count > 0).length})
-                </h3>
-                <div className="space-y-2">
-                  {monitoredAreas
-                    .filter(a => a.detection_count > 0 && a.alert_enabled !== false)
-                    .map(area => (
-                      <div
-                        key={area.id}
-                        className="bg-white border-l-4 border-red-600 p-3 rounded cursor-pointer hover:shadow-md transition-all"
-                        onClick={() => handleAreaClick(area.id)}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="font-semibold text-red-900">{area.name}</div>
-                            <div className="text-sm text-red-700 mt-1">
-                              ⚠️ {area.detection_count} deforestation event{area.detection_count > 1 ? 's' : ''} detected
-                            </div>
-                            {area.last_monitored && (
-                              <div className="text-xs text-gray-600 mt-1">
-                                Last detected: {new Date(area.last_monitored).toLocaleString()}
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              // Dismiss alert by updating area
-                              const updateAlert = async () => {
-                                await apiFetch(`/api/monitored-areas/${area.id}`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ alert_enabled: false })
-                                });
-                                fetchMonitoredAreas();
-                              };
-                              updateAlert();
-                            }}
-                            className="text-xs text-gray-500 hover:text-gray-700 px-2"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+            {/* ── Deforestation Statistics Panel (shown when an area is focused) ── */}
+            {selectedMonitoredArea && (
+              <div className={`mt-4 rounded-xl border-2 shadow-lg overflow-hidden ${
+                (selectedMonitoredArea.detection_history ?? []).some((h: any) => h.deforestation_detected)
+                  ? 'border-red-400 bg-red-50'
+                  : 'border-green-400 bg-green-50'
+              }`}>
+                {/* Header */}
+                <div className={`px-5 py-3 flex items-center justify-between ${
+                  (selectedMonitoredArea.detection_history ?? []).some((h: any) => h.deforestation_detected)
+                    ? 'bg-red-600 text-white'
+                    : 'bg-green-600 text-white'
+                }`}>
+                  <div>
+                    <h3 className="text-lg font-bold">{selectedMonitoredArea.name}</h3>
+                    <p className="text-xs opacity-80">{selectedMonitoredArea.description || 'Monitored area'}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold px-3 py-1 rounded-full bg-white bg-opacity-20">
+                      {(selectedMonitoredArea.detection_history ?? []).some((h: any) => h.deforestation_detected)
+                        ? '⚠️ Deforestation Detected'
+                        : '✅ No Deforestation'}
+                    </span>
+                    <button
+                      onClick={() => { setSelectedMonitoredArea(null); setFocusAreaId(null); }}
+                      className="text-white opacity-70 hover:opacity-100 text-xl font-bold leading-none"
+                      title="Close panel"
+                    >×</button>
+                  </div>
                 </div>
-                <div className="mt-3 text-xs text-red-700 italic">
-                  💡 Click on an alert to view detailed detection results
-                </div>
-              </div>
-            )}
 
-            {/* Monitored Areas List */}
-            {monitoredAreas.length > 0 && (
-              <div className="mt-6 bg-gray-50 rounded-lg p-4">
-                <h3 className="font-semibold text-gray-900 mb-3">📋 Your Monitored Areas ({monitoredAreas.length})</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {monitoredAreas.map(area => (
-                    <div
-                      key={area.id}
-                      className={`bg-white border rounded-lg p-3 transition-all cursor-pointer ${
-                        selectedMonitoredArea?.id === area.id 
-                          ? 'ring-2 ring-indigo-500 shadow-md' 
-                          : 'hover:shadow-md'
-                      }`}
-                      onClick={() => handleAreaClick(area.id)}
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <h4 className="font-semibold text-gray-900">{area.name}</h4>
-                          {area.description && (
-                            <p className="text-xs text-gray-600 mt-1">{area.description}</p>
-                          )}
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteMonitoredArea(area.id);
-                          }}
-                          className="text-red-600 hover:text-red-800 p-1"
-                          title="Delete area"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                      
-                      <div className="text-xs text-gray-500 space-y-1">
-                        <div>Created: {new Date(area.created_at).toLocaleDateString()}</div>
-                        {area.last_monitored && (
-                          <div>Last checked: {new Date(area.last_monitored).toLocaleString()}</div>
-                        )}
-                        {area.detection_count > 0 && (
-                          <div className="text-red-600 font-semibold">
-                            ⚠️ {area.detection_count} detections
-                          </div>
-                        )}
-                        {area.continuous_monitoring && (
-                          <div className="text-green-600 font-semibold flex items-center gap-1">
-                            <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                            Continuous monitoring active
-                          </div>
-                        )}
-                        {areaDates[area.id] && (
-                          <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
-                            <div className="font-semibold text-blue-900 mb-1">📅 Selected Dates:</div>
-                            <div className="text-blue-800">
-                              Before: <strong>{areaDates[area.id]?.before || 'Not set'}</strong>
-                            </div>
-                            <div className="text-blue-800">
-                              After: <strong>{areaDates[area.id]?.after || 'Not set'}</strong>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Date Range Selection */}
-                      {showDatePicker === area.id && (
-                        <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded space-y-2" onClick={(e) => e.stopPropagation()}>
-                          <div className="text-xs font-semibold text-blue-900 mb-2">Select Date Range:</div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-xs text-gray-600">Before:</label>
-                              <input
-                                type="date"
-                                value={areaDates[area.id]?.before || ''}
-                                max="2025-12-31"
-                                onChange={(e) => {
-                                  const newValue = e.target.value;
-                                  console.log('Before date changed:', newValue);
-                                  setAreaDates(prev => ({
-                                    ...prev,
-                                    [area.id]: {
-                                      before: newValue,
-                                      after: prev[area.id]?.after || ''
-                                    }
-                                  }));
-                                }}
-                                placeholder="Select before date"
-                                className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-xs text-gray-600">After:</label>
-                              <input
-                                type="date"
-                                value={areaDates[area.id]?.after || ''}
-                                max="2025-12-31"
-                                onChange={(e) => {
-                                  const newValue = e.target.value;
-                                  console.log('After date changed:', newValue);
-                                  setAreaDates(prev => ({
-                                    ...prev,
-                                    [area.id]: {
-                                      before: prev[area.id]?.before || '',
-                                      after: newValue
-                                    }
-                                  }));
-                                }}
-                                placeholder="Select after date"
-                                className="w-full px-2 py-1 text-xs border border-gray-300 rounded"
-                              />
-                            </div>
-                          </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setShowDatePicker(null);
-                            }}
-                            className="text-xs text-blue-600 hover:text-blue-800 underline"
-                          >
-                            Close
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Action Buttons */}
-                      <div className="mt-2 space-y-2">
-                        {/* Show selected dates prominently */}
-                        {areaDates[area.id]?.before && areaDates[area.id]?.after && (
-                          <div className="px-3 py-2 bg-green-50 border border-green-200 rounded text-xs">
-                            <div className="font-semibold text-green-800 mb-1">✓ Dates Selected:</div>
-                            <div className="text-green-700">
-                              Before: <strong>{areaDates[area.id].before}</strong><br/>
-                              After: <strong>{areaDates[area.id].after}</strong>
-                            </div>
-                          </div>
-                        )}
-                        
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (showDatePicker === area.id) {
-                              setShowDatePicker(null);
-                            } else {
-                              setShowDatePicker(area.id);
-                              // NO default dates - user must select manually
-                            }
-                          }}
-                          className="w-full px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
-                        >
-                          <Calendar className="h-3 w-3" />
-                          {showDatePicker === area.id ? 'Hide Dates' : 'Select Date Range'}
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            console.log('RUN DETECTION CLICKED - Area ID:', area.id);
-                            console.log('Current dates for this area:', areaDates[area.id]);
-                            runDetectionOnArea(area.id);
-                          }}
-                          disabled={areaDetectionRunning || !areaDates[area.id]?.before || !areaDates[area.id]?.after}
-                          className={`w-full px-3 py-2 text-sm rounded transition-colors flex items-center justify-center gap-2 ${
-                            areaDetectionRunning 
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                              : (!areaDates[area.id]?.before || !areaDates[area.id]?.after)
-                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                          }`}
-                          title={(!areaDates[area.id]?.before || !areaDates[area.id]?.after) ? 'Please select date range first' : `Run detection: ${areaDates[area.id]?.before} to ${areaDates[area.id]?.after}`}
-                        >
-                          {areaDetectionRunning ? (
-                            <>
-                              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              Running...
-                            </>
-                          ) : (
-                            <>
-                              <Play className="h-4 w-4" />
-                              {areaDates[area.id]?.before && areaDates[area.id]?.after 
-                                ? 'Run Detection Now' 
-                                : 'Select Dates First'}
-                            </>
-                          )}
-                        </button>
-                      </div>
+                {/* Stats Grid */}
+                <div className="px-5 py-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {/* Detection count */}
+                  <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+                    <div className="text-2xl font-bold text-gray-900">{selectedMonitoredArea.detection_count ?? 0}</div>
+                    <div className="text-xs text-gray-500 mt-1">Total Detections</div>
+                  </div>
+                  {/* Latest forest loss */}
+                  <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+                    <div className={`text-2xl font-bold ${
+                      (selectedMonitoredArea.detection_history ?? []).find((h: any) => h.deforestation_detected)
+                        ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      {(() => {
+                        const latest = (selectedMonitoredArea.detection_history ?? [])
+                          .filter((h: any) => h.deforestation_detected)
+                          .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+                        return latest ? `${Math.abs(latest.forest_loss_percent).toFixed(1)}%` : '0%';
+                      })()}
                     </div>
-                  ))}
+                    <div className="text-xs text-gray-500 mt-1">Peak Forest Loss</div>
+                  </div>
+                  {/* Vegetation trend */}
+                  <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+                    <div className="text-2xl font-bold">
+                      {(() => {
+                        const last = (selectedMonitoredArea.detection_history ?? []).slice(-1)[0];
+                        const trend = last?.vegetation_trend ?? 'unknown';
+                        return trend === 'growth' ? '🌱' : trend === 'decline' ? '🍂' : '〰️';
+                      })()}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1 capitalize">
+                      {(selectedMonitoredArea.detection_history ?? []).slice(-1)[0]?.vegetation_trend ?? 'Unknown'} Trend
+                    </div>
+                  </div>
+                  {/* Last monitored */}
+                  <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+                    <div className="text-sm font-bold text-gray-900">
+                      {selectedMonitoredArea.last_monitored
+                        ? new Date(selectedMonitoredArea.last_monitored).toLocaleDateString()
+                        : 'Never'}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">Last Monitored</div>
+                  </div>
+                </div>
+
+                {/* Detection History Table */}
+                {(selectedMonitoredArea.detection_history ?? []).length > 0 && (
+                  <div className="px-5 pb-4">
+                    <h4 className="font-semibold text-gray-800 mb-2 text-sm">📜 Detection History</h4>
+                    <div className="overflow-y-auto max-h-48 rounded-lg border border-gray-200 bg-white">
+                      <table className="w-full text-xs">
+                        <thead className="bg-gray-100 text-gray-600 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Date</th>
+                            <th className="px-3 py-2 text-left">Period</th>
+                            <th className="px-3 py-2 text-left">Result</th>
+                            <th className="px-3 py-2 text-right">Forest Loss</th>
+                            <th className="px-3 py-2 text-left">Trend</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(selectedMonitoredArea.detection_history ?? [])
+                            .slice()
+                            .reverse()
+                            .map((record: any, idx: number) => (
+                              <tr key={idx} className={`border-t ${record.deforestation_detected ? 'bg-red-50' : ''}`}>
+                                <td className="px-3 py-2 text-gray-700">
+                                  {new Date(record.timestamp).toLocaleDateString()}
+                                </td>
+                                <td className="px-3 py-2 text-gray-600">
+                                  {record.before_date} → {record.after_date}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                    record.deforestation_detected
+                                      ? 'bg-red-100 text-red-700'
+                                      : 'bg-green-100 text-green-700'
+                                  }`}>
+                                    {record.deforestation_detected ? '⚠️ Detected' : '✅ Clear'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-right font-medium">
+                                  {record.deforestation_detected
+                                    ? <span className="text-red-700">{Math.abs(record.forest_loss_percent ?? 0).toFixed(2)}%</span>
+                                    : <span className="text-gray-400">—</span>
+                                  }
+                                </td>
+                                <td className="px-3 py-2 capitalize text-gray-600">
+                                  {record.vegetation_trend ?? '—'}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Legend */}
+                <div className="px-5 pb-3 flex items-center gap-4 text-xs text-gray-500">
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-500"></span> Deforested area on map</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-green-500"></span> Healthy area on map</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-gray-400"></span> Monitoring disabled</span>
                 </div>
               </div>
             )}
@@ -1853,11 +2166,22 @@ const MapViewPage: React.FC = () => {
             )}
 
             {/* Selected Area Detection Results */}
-            {selectedMonitoredArea && areaDetectionResult && (
-              <div className="mt-6 bg-white border rounded-lg p-4 shadow-md">
-                <h3 className="font-semibold text-gray-900 mb-3">
-                  📊 Detection Results: {selectedMonitoredArea.name}
-                </h3>
+            {selectedMonitoredArea && (
+              <div className="mt-6 space-y-4">
+                {/* Detection Timeline */}
+                <MonitoringTimeline
+                  detectionHistory={selectedMonitoredArea.detection_history || []}
+                  monitoringStartDate={selectedMonitoredArea.monitoring_started_date}
+                  nextScheduledDetection={selectedMonitoredArea.next_scheduled_detection}
+                  activeMonitoring={selectedMonitoredArea.active_monitoring || false}
+                />
+
+                {/* Current Detection Results */}
+                {areaDetectionResult && (
+                  <div className="bg-white border rounded-lg p-4 shadow-md">
+                    <h3 className="font-semibold text-gray-900 mb-3">
+                      📊 Latest Detection Results: {selectedMonitoredArea.name}
+                    </h3>
                 <div className={`p-4 rounded-lg ${
                   areaDetectionResult.deforestation_detected 
                     ? 'bg-red-50 border border-red-200' 
@@ -1939,6 +2263,8 @@ const MapViewPage: React.FC = () => {
               </div>
             )}
           </div>
+          )}
+        </div>
         ) : (
           <>
             {mapError && (
@@ -1955,13 +2281,17 @@ const MapViewPage: React.FC = () => {
           className="w-full h-[600px] border-0"
           onError={() => setMapError(true)}
         />
+
         {/* Map Controls integrated with backend map */}
         <div className="bg-gray-50 border-b border-gray-200 p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-600">
-                  Region: {selectedRegion} • {filteredAlerts.length} alerts
+                  {monitoredAreas.filter((a: any) => a.active_monitoring).length} area(s) actively monitored
+                  {monitoredAreas.filter((a: any) => (a.detection_history||[]).some((h: any) => h.deforestation_detected)).length > 0
+                    ? ` • ${monitoredAreas.filter((a: any) => (a.detection_history||[]).some((h: any) => h.deforestation_detected)).length} flagged`
+                    : ' • No deforestation detected'}
                 </span>
               </div>
             </div>

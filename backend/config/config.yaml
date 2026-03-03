@@ -97,6 +97,21 @@ processing:
     # Temporal window for change detection (months)
     temporal_window_months: 6
 
+# Database Configuration
+database:
+  type: "mysql"  # Database type
+  host: "localhost"
+  port: 3306
+  database: "deforestation_db"
+  username: "root"
+  password: ""  # XAMPP default is empty password for root
+  charset: "utf8mb4"
+  
+  # Connection pool settings
+  pool_size: 5
+  max_overflow: 10
+  pool_recycle: 3600
+
 # Logging
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL

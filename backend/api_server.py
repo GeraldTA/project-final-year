@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Deforestation Detection API", version="1.0.0")
 
 from src.ml.api_integration import ml_router, initialize_ml_system, detect_change_auto_internal
+from services.area_manager import AreaManager
+from services.monitoring_scheduler import scheduler
+from api.monitored_areas import router as monitored_areas_router
+from database.db_manager import get_db_manager
+from services.search_history_manager import SearchHistoryManager
+import asyncio
+
+# Initialize services
+db_manager = get_db_manager()
+area_manager = AreaManager()
+search_history_manager = SearchHistoryManager()
+scheduler_task = None
 
 # Allow frontend to access API
 app.add_middleware(
@@ -46,12 +58,53 @@ geolocator = Nominatim(user_agent="deforestation_detector_zimbabwe", timeout=10)
 
 @app.on_event("startup")
 async def _startup():
-    # Initialize pretrained ML detector on startup
-    initialize_ml_system()
+    global scheduler_task
+    
+    # Test and initialize database
+    logger.info("Initializing database connection...")
+    if db_manager.test_connection():
+        logger.info("✓ Database connection successful")
+        try:
+            db_manager.initialize_database()
+            logger.info("✓ Database schema initialized")
+        except Exception as e:
+            logger.warning(f"Database schema initialization: {e}")
+    else:
+        logger.error("✗ Database connection failed - check config.yaml settings")
+    
+    # Initialize pretrained ML detector in a background thread so the server
+    # starts immediately and accepts requests while the model downloads/loads.
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, initialize_ml_system)
+    logger.info("ML system initializing in background thread...")
+
+    # Start monitoring scheduler in background
+    scheduler_task = asyncio.create_task(scheduler.start())
+    logger.info("Monitoring scheduler started in background")
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    # Stop monitoring scheduler
+    scheduler.stop()
+    if scheduler_task:
+        scheduler_task.cancel()
+    logger.info("Monitoring scheduler stopped")
 
 
 # Register ML endpoints (router already has prefix=/api/ml)
 app.include_router(ml_router)
+
+# Register monitored areas endpoints
+app.include_router(monitored_areas_router)
+
+# Register search history endpoints
+from api.search_history import router as search_history_router
+app.include_router(search_history_router)
+
+# Register authentication endpoints
+from api.auth import router as auth_router
+app.include_router(auth_router)
 
 
 @app.get("/api/map")
@@ -975,7 +1028,8 @@ async def start_monitoring(request: dict):
 
 
 @app.get("/api/search/location")
-def search_location(
+async def search_location(
+    request: Request,
     query: str = Query(..., description="Place name, address, or coordinates to search"),
     country: str = Query("Zimbabwe", description="Country to limit search (default: Zimbabwe)")
 ):
@@ -987,8 +1041,14 @@ def search_location(
     - "Victoria Falls" - tourist location
     - "-17.8252, 31.0335" - coordinates
     - "Mutare, Manicaland" - city with province
+    
+    Search history is automatically saved to the database.
     """
     try:
+        # Get user info for tracking
+        user_ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent", None)
+        
         # Add country to query for better results if not already specified
         search_query = query
         if country and country.lower() not in query.lower():
@@ -1062,6 +1122,24 @@ def search_location(
             results.append(result)
         
         logger.info(f"Found {len(results)} results for '{query}'")
+        
+        # Save search to history with first result location if available
+        first_lat = results[0]["latitude"] if results else None
+        first_lng = results[0]["longitude"] if results else None
+        
+        try:
+            search_history_manager.add_search(
+                query=query,
+                results_count=len(results),
+                search_type="location",
+                country=country,
+                user_ip=user_ip,
+                user_agent=user_agent,
+                latitude=first_lat,
+                longitude=first_lng
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save search history: {e}")
         
         return JSONResponse({
             "success": True,

@@ -12,6 +12,15 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+interface HotspotMarker {
+  lat: number;
+  lng: number;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  forest_loss_percent: number;
+  detected_date?: string;
+  vegetation_trend?: string;
+}
+
 interface InteractiveMapProps {
   center?: [number, number];
   zoom?: number;
@@ -21,9 +30,13 @@ interface InteractiveMapProps {
     name: string;
     coordinates: [number, number][];
     monitoring_enabled?: boolean;
+    detection_count?: number;
+    detection_history?: Array<{ deforestation_detected: boolean; forest_loss_percent?: number }>;
   }>;
   onAreaClick?: (areaId: string) => void;
   drawingEnabled?: boolean;
+  focusAreaId?: string | null;  // fly-to + highlight this area
+  hotspots?: HotspotMarker[];   // deforestation pin markers
 }
 
 const InteractiveMap: React.FC<InteractiveMapProps> = ({
@@ -32,12 +45,15 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
   onAreaDrawn,
   existingAreas = [],
   onAreaClick,
-  drawingEnabled = true
+  drawingEnabled = true,
+  focusAreaId = null,
+  hotspots = [],
 }) => {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
   const existingAreasLayerRef = useRef<L.FeatureGroup | null>(null);
+  const hotspotsLayerRef = useRef<L.FeatureGroup | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawMode, setDrawMode] = useState<string>('');
   const [mousePosition, setMousePosition] = useState<{lat: number, lng: number} | null>(null);
@@ -90,6 +106,11 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     const existingAreasLayer = new L.FeatureGroup();
     map.addLayer(existingAreasLayer);
     existingAreasLayerRef.current = existingAreasLayer;
+
+    // Initialize separate layer for deforestation hotspot markers
+    const hotspotsLayer = new L.FeatureGroup();
+    map.addLayer(hotspotsLayer);
+    hotspotsLayerRef.current = hotspotsLayer;
 
     if (drawingEnabled) {
       // Custom 4-point rectangle drawing
@@ -264,9 +285,10 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Update existing areas on map - ONLY when manually refreshed
+  // Update existing areas on map - render on first load and on manual refresh
   useEffect(() => {
-    if (!mapRef.current || !existingAreasLayerRef.current || !shouldRefreshAreas) return;
+    if (!mapRef.current || !existingAreasLayerRef.current) return;
+    if (existingAreas.length === 0 && !shouldRefreshAreas) return;
 
     // Clear only existing areas layer (not the newly drawn items)
     existingAreasLayerRef.current.clearLayers();
@@ -275,16 +297,31 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     existingAreas.forEach(area => {
       if (!mapRef.current || !existingAreasLayerRef.current) return;
 
+      // Determine colour: red = deforestation confirmed, green = healthy, grey = disabled
+      // Use ONLY detection_history.deforestation_detected — detection_count
+      // just counts scans and is NOT a reliable deforestation indicator.
+      const hasDeforestation =
+        (area.detection_history ?? []).some((h: any) => h.deforestation_detected);
+      const latestLoss = (area.detection_history ?? [])
+        .filter(h => h.deforestation_detected)
+        .reduce((acc, h) => Math.max(acc, Math.abs(h.forest_loss_percent ?? 0)), 0);
+
+      let color = '#22c55e';          // green – healthy
+      if (!area.monitoring_enabled) color = '#9ca3af';  // grey  – disabled
+      if (hasDeforestation) color = '#ef4444';          // red   – deforestation
+
       const polygon = L.polygon(area.coordinates as L.LatLngExpression[], {
-        color: area.monitoring_enabled ? '#22c55e' : '#9ca3af',
+        color,
         weight: 2,
         fillOpacity: 0.3
-      });
+      })
 
       polygon.bindPopup(`
         <div style="min-width: 200px;">
           <strong>${area.name}</strong><br/>
-          <small>${area.monitoring_enabled ? '🟢 Monitoring Enabled' : '⚫ Monitoring Disabled'}</small><br/>
+          <small>${hasDeforestation
+            ? `🔴 Deforestation detected${latestLoss > 0 ? ` – ${latestLoss.toFixed(1)}% loss` : ''}`
+            : (area.monitoring_enabled ? '🟢 Monitoring Enabled' : '⚫ Monitoring Disabled')}</small><br/>
           <button 
             onclick="window.dispatchEvent(new CustomEvent('area-click', { detail: '${area.id}' }))"
             style="margin-top: 8px; padding: 4px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;"
@@ -304,16 +341,152 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
       });
     });
 
-    // Fit bounds if there are areas
-    if (existingAreas.length > 0 && existingAreasLayerRef.current.getLayers().length > 0) {
+    // Fit bounds only if no focusAreaId (focusAreaId will fly there separately)
+    if (!focusAreaId && existingAreas.length > 0 && existingAreasLayerRef.current.getLayers().length > 0) {
       mapRef.current.fitBounds(existingAreasLayerRef.current.getBounds(), {
         padding: [50, 50]
       });
     }
-    
+
     // Reset refresh flag
     setShouldRefreshAreas(false);
-  }, [shouldRefreshAreas]); // Only refresh when manually triggered
+  }, [existingAreas, shouldRefreshAreas]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fly to and highlight the focused area when focusAreaId changes
+  useEffect(() => {
+    if (!focusAreaId || !mapRef.current || !existingAreasLayerRef.current) return;
+    const layers = existingAreasLayerRef.current.getLayers() as L.Polygon[];
+    const area = existingAreas.find(a => a.id === focusAreaId);
+    if (!area || area.coordinates.length === 0) return;
+
+    // Fly to the area
+    const poly = L.polygon(area.coordinates as L.LatLngExpression[]);
+    mapRef.current.flyToBounds(poly.getBounds(), { padding: [40, 40], maxZoom: 12, duration: 1 });
+
+    // Apply a bright pulsing highlight to the focused polygon
+    layers.forEach(layer => {
+      if (layer instanceof L.Polygon) {
+        const latlngs = layer.getLatLngs()[0] as L.LatLng[];
+        const firstPt = latlngs[0];
+        const areaFirstPt = area.coordinates[0];
+        const isFocused =
+          firstPt &&
+          Math.abs(firstPt.lat - areaFirstPt[0]) < 0.0001 &&
+          Math.abs(firstPt.lng - areaFirstPt[1]) < 0.0001;
+        if (isFocused) {
+          layer.setStyle({ weight: 4, fillOpacity: 0.5, dashArray: '6 4' });
+          layer.openPopup();
+        } else {
+          layer.setStyle({ weight: 2, fillOpacity: 0.2, dashArray: undefined });
+        }
+      }
+    });
+  }, [focusAreaId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Pixel-grid deforestation rendering ────────────────────────────────────
+  // Each hotspot is broken into a grid of small geographic rectangles
+  // (~18 m per side) that individually represent a deforested land unit.
+  // A seeded LCG ensures the same pixel pattern appears on every page load.
+
+  function lcgRng(seed: number) {
+    let s = (seed ^ 0xdeadbeef) >>> 0;
+    return () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  function renderHotspotPixels(h: HotspotMarker, layer: L.FeatureGroup) {
+    // Geographic size of one "pixel" ≈ 500 m — visible at zoom 10+
+    const pixelDeg = 0.005;
+
+    // Grid dimensions and fill density scale with severity
+    const gridSizes: Record<string, number>    = { critical: 10, high: 8, medium: 6, low: 4 };
+    const densities: Record<string, number>    = { critical: 0.85, high: 0.70, medium: 0.55, low: 0.40 };
+    const grid    = gridSizes[h.severity]  ?? 6;
+    const density = densities[h.severity] ?? 0.55;
+    const half    = (grid * pixelDeg) / 2;
+
+    // Seed deterministically from the hotspot coordinates
+    const seed = Math.abs(Math.floor(h.lat * 100000 + h.lng * 100000)) | 0;
+    const rng  = lcgRng(seed);
+
+    // Multi-shade palettes per severity: darkest (most burned) → lighter
+    const palettes: Record<string, string[]> = {
+      critical: ['#3b0000', '#5c0000', '#7f1d1d', '#991b1b', '#b91c1c'],
+      high:     ['#7f1d1d', '#991b1b', '#b91c1c', '#dc2626', '#ef4444'],
+      medium:   ['#9a3412', '#c2410c', '#ea580c', '#f97316', '#fb923c'],
+      low:      ['#92400e', '#b45309', '#d97706', '#f59e0b', '#fcd34d'],
+    };
+    const palette      = palettes[h.severity] ?? palettes.high;
+    const severityLabel = h.severity.charAt(0).toUpperCase() + h.severity.slice(1);
+    const dateStr      = h.detected_date ? `<br/><small>📅 ${h.detected_date}</small>` : '';
+    const trendStr     = h.vegetation_trend ? `<br/><small>Trend: ${h.vegetation_trend}</small>` : '';
+
+    for (let row = 0; row < grid; row++) {
+      for (let col = 0; col < grid; col++) {
+        if (rng() > density) continue;           // sparse pixel → skip
+
+        const lat0  = h.lat - half + row * pixelDeg;
+        const lng0  = h.lng - half + col * pixelDeg;
+        const color = palette[Math.floor(rng() * palette.length)];
+        const alpha = 0.68 + rng() * 0.30;
+
+        const rect = L.rectangle(
+          [[lat0, lng0], [lat0 + pixelDeg, lng0 + pixelDeg]],
+          { color: 'none', weight: 0, fillColor: color, fillOpacity: alpha }
+        );
+        rect.bindPopup(
+          `<div style="font-family:sans-serif;min-width:175px">`
+          + `<b style="color:${color}">🟥 Deforested Unit</b>`
+          + `<br/>Hotspot severity: <strong>${severityLabel}</strong>`
+          + `<br/>Forest loss: <strong>${h.forest_loss_percent}%</strong>`
+          + `<br/><small>📍 ${lat0.toFixed(5)}, ${lng0.toFixed(5)}</small>`
+          + dateStr + trendStr
+          + `</div>`
+        );
+        layer.addLayer(rect);
+      }
+    }
+
+    // Dashed border outlines the pixel cluster
+    layer.addLayer(L.rectangle(
+      [
+        [h.lat - half - pixelDeg * 0.5, h.lng - half - pixelDeg * 0.5],
+        [h.lat + half + pixelDeg * 0.5, h.lng + half + pixelDeg * 0.5],
+      ],
+      { color: '#ffffff', weight: 1.5, fillOpacity: 0, dashArray: '6 4' }
+    ));
+
+    // Large pulsing circle anchor — always visible regardless of zoom level
+    const anchorColor = palette[0];
+    const anchor = L.circleMarker([h.lat, h.lng], {
+      radius: 14,
+      color: '#ffffff',
+      weight: 2,
+      fillColor: anchorColor,
+      fillOpacity: 0.9,
+    });
+    anchor.bindPopup(
+      `<div style="font-family:sans-serif;min-width:175px">`
+      + `<b style="color:${anchorColor}">🔴 Deforestation Hotspot</b>`
+      + `<br/>Severity: <strong>${severityLabel}</strong>`
+      + `<br/>Forest loss: <strong>${h.forest_loss_percent}%</strong>`
+      + dateStr
+      + `<br/><small>Zoom in to see pixel-level detail</small>`
+      + `</div>`
+    );
+    layer.addLayer(anchor);
+  }
+
+  // Render / re-render whenever the hotspots array changes
+  useEffect(() => {
+    if (!hotspotsLayerRef.current) return;
+    hotspotsLayerRef.current.clearLayers();
+    if (!hotspots || hotspots.length === 0) return;
+    hotspots.forEach(h => renderHotspotPixels(h, hotspotsLayerRef.current!));
+    // Note: no flyToBounds here — focusAreaId effect handles camera movement
+  }, [hotspots]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle custom area-click events from popup buttons
   useEffect(() => {

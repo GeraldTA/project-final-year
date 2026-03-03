@@ -1,0 +1,34 @@
+[
+  {
+    "id": "a8947b2c-726f-4698-8ced-4adba28d9769",
+    "name": "test",
+    "coordinates": [
+      [
+        -19.26759110987356,
+        30.498870837036524
+      ],
+      [
+        -19.29999715176239,
+        30.498870837036524
+      ],
+      [
+        -19.29870103323873,
+        30.548309313599027
+      ],
+      [
+        -19.264998349566955,
+        30.553802477661527
+      ]
+    ],
+    "description": "",
+    "created_at": "2026-02-06T10:55:53.764900",
+    "last_monitored": null,
+    "monitoring_enabled": true,
+    "active_monitoring": true,
+    "monitoring_started_date": "2026-02-06T10:56:14.754835",
+    "monitoring_interval_days": 5,
+    "next_scheduled_detection": "2026-02-11T10:56:14.754835",
+    "detection_count": 0,
+    "detection_history": []
+  }
+]

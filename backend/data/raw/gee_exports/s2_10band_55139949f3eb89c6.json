@@ -1,0 +1,29 @@
+{
+  "cached": false,
+  "generated_at": "2026-03-01T21:14:14.470875Z",
+  "start_date": "2025-12-31",
+  "end_date": "2026-01-30",
+  "bounds": {
+    "west": 28.641563412384134,
+    "south": -20.172118263880197,
+    "east": 28.685508724884134,
+    "north": -20.14762430323214
+  },
+  "bands": [
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7",
+    "B8",
+    "B8A",
+    "B11",
+    "B12"
+  ],
+  "scale": 10,
+  "dimensions": 512,
+  "max_cloud_cover": 30.0,
+  "collection_size": 1,
+  "source": "GEE COPERNICUS/S2_SR_HARMONIZED median composite"
+}

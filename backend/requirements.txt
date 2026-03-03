@@ -43,6 +43,14 @@ xarray>=0.20.0
 schedule>=1.1.0
 APScheduler>=3.9.0
 
+# Database
+pymysql>=1.1.0
+
+# Authentication (JWT)
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1  # passlib 1.7.4 is incompatible with bcrypt>=5.0
+
 # Configuration and utilities
 pyyaml>=6.0
 python-dotenv>=0.19.0

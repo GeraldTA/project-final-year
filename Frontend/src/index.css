@@ -34,6 +34,56 @@
   transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
+/* ─── Dark mode overrides for hardcoded Tailwind colours ───────────────────
+   These ensure any component still using bg-white / text-gray-* / border-gray-*
+   automatically adapts when the .dark class is active on the root element.    */
+
+/* Backgrounds */
+.dark .bg-white          { background-color: var(--theme-card)  !important; }
+.dark .bg-gray-50        { background-color: var(--theme-bg)    !important; }
+.dark .bg-gray-100       { background-color: var(--theme-hover) !important; }
+.dark .bg-gray-200       { background-color: var(--theme-hover) !important; }
+
+/* Hover backgrounds */
+.dark .hover\:bg-white:hover     { background-color: var(--theme-card)  !important; }
+.dark .hover\:bg-gray-50:hover   { background-color: var(--theme-hover) !important; }
+.dark .hover\:bg-gray-100:hover  { background-color: var(--theme-hover) !important; }
+.dark .hover\:bg-gray-200:hover  { background-color: var(--theme-hover) !important; }
+
+/* Text colours */
+.dark .text-gray-900  { color: var(--theme-text-primary)   !important; }
+.dark .text-gray-800  { color: var(--theme-text-primary)   !important; }
+.dark .text-gray-700  { color: var(--theme-text-secondary) !important; }
+.dark .text-gray-600  { color: var(--theme-text-secondary) !important; }
+.dark .text-gray-500  { color: var(--theme-text-secondary) !important; }
+.dark .text-gray-400  { color: var(--theme-text-secondary) !important; }
+
+/* Borders */
+.dark .border-gray-100 { border-color: var(--theme-border) !important; }
+.dark .border-gray-200 { border-color: var(--theme-border) !important; }
+.dark .border-gray-300 { border-color: var(--theme-border) !important; }
+
+/* Divide (table row separators) */
+.dark .divide-gray-100 > * + * { border-color: var(--theme-border) !important; }
+.dark .divide-gray-200 > * + * { border-color: var(--theme-border) !important; }
+
+/* Inputs and selects */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: var(--theme-hover) !important;
+  color: var(--theme-text-primary)     !important;
+  border-color: var(--theme-border)    !important;
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: var(--theme-text-secondary) !important; }
+
+/* Table headers */
+.dark thead,
+.dark .bg-gray-50 thead { background-color: var(--theme-hover) !important; }
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 /* High-quality image rendering for satellite images */
 img {
   image-rendering: -webkit-optimize-contrast;

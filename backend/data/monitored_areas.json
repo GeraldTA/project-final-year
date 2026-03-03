@@ -1,6 +1,38 @@
 {
   "areas": [
     {
+      "id": "211e5f28-67a7-46e8-a163-20eb80b77f8d",
+      "name": "chirinda game",
+      "description": "",
+      "coordinates": [
+        [
+          -17.623605318880433,
+          30.038269017823044
+        ],
+        [
+          -17.628840590864485,
+          30.268981908448044
+        ],
+        [
+          -17.730897964013494,
+          30.274475072510544
+        ],
+        [
+          -17.76751978978138,
+          30.010803197510544
+        ]
+      ],
+      "created_at": "2026-03-01T11:40:13.977120",
+      "last_monitored": null,
+      "monitoring_enabled": true,
+      "active_monitoring": true,
+      "monitoring_interval_days": 5,
+      "detection_count": 0,
+      "detection_history": [],
+      "monitoring_started_date": "2026-03-01T11:40:28.022314",
+      "next_scheduled_detection": "2026-03-06T11:40:28"
+    },
+    {
       "id": "80aa81c2-a728-4524-867a-061475d9c251",
       "name": "Lake Chivero Forest",
       "coordinates": [
@@ -71,7 +103,11 @@
           "forest_loss_percent": -15.167386724638213,
           "vegetation_trend": "stable"
         }
-      ]
+      ],
+      "active_monitoring": true,
+      "monitoring_started_date": "2026-03-01T11:40:39.478836",
+      "next_scheduled_detection": "2026-03-06T11:40:39",
+      "monitoring_interval_days": 5
     },
     {
       "id": "6ca18266-9eb4-4cd9-9870-45e53eab0005",
@@ -174,7 +210,11 @@
           "forest_loss_percent": 3.432260113040728,
           "vegetation_trend": "stable"
         }
-      ]
+      ],
+      "active_monitoring": true,
+      "monitoring_started_date": "2026-03-01T11:40:44.504444",
+      "next_scheduled_detection": "2026-03-06T11:40:44",
+      "monitoring_interval_days": 5
     },
     {
       "id": "bc9ff25c-d540-43e8-a2db-a672b641e48f",
@@ -213,7 +253,11 @@
           "forest_loss_percent": -661.4796580451377,
           "vegetation_trend": "decline"
         }
-      ]
+      ],
+      "active_monitoring": true,
+      "monitoring_started_date": "2026-03-01T11:40:48.861382",
+      "next_scheduled_detection": "2026-03-06T11:40:48",
+      "monitoring_interval_days": 5
     },
     {
       "id": "593179fd-8245-4075-9866-0462f2809a09",
@@ -243,7 +287,11 @@
       "continuous_monitoring": true,
       "alert_enabled": true,
       "detection_count": 0,
-      "detection_history": []
+      "detection_history": [],
+      "active_monitoring": true,
+      "monitoring_started_date": "2026-03-01T11:40:53.022170",
+      "next_scheduled_detection": "2026-03-06T11:40:53",
+      "monitoring_interval_days": 5
     },
     {
       "id": "252c83d4-ec5c-493a-b86c-6066dcca9945",
@@ -282,7 +330,11 @@
           "forest_loss_percent": 8.606508485575691,
           "vegetation_trend": "growth"
         }
-      ]
+      ],
+      "active_monitoring": true,
+      "monitoring_started_date": "2026-03-01T11:40:57.147738",
+      "next_scheduled_detection": "2026-03-06T11:40:57",
+      "monitoring_interval_days": 5
     }
   ]
 }

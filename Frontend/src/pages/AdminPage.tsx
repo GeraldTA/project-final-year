@@ -1,8 +1,35 @@
-import React, { useState } from 'react';
-import { Users, Settings, Bell, Shield, Database, Activity } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, Settings, Bell, Shield, Database, Activity, X, UserPlus, Loader2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { apiUrl } from '../utils/api';
+
+interface ApiUser {
+  id: string;
+  full_name: string;
+  email: string;
+  role: 'admin' | 'employee';
+  is_active: boolean;
+  last_login: string | null;
+  created_at: string | null;
+}
+
+const EMPTY_FORM = { full_name: '', email: '', password: '', role: 'employee' as 'admin' | 'employee' };
 
 const AdminPage: React.FC = () => {
+  const { authFetch } = useAuth();
   const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'alerts' | 'system'>('users');
+
+  // ── User list state ──────────────────────────────────────────────────────
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState<string | null>(null);
+
+  // ── Add-user modal state ─────────────────────────────────────────────────
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const tabs = [
     { id: 'users', label: 'User Management', icon: Users },
@@ -11,12 +38,75 @@ const AdminPage: React.FC = () => {
     { id: 'system', label: 'System Status', icon: Database }
   ];
 
-  const mockUsers = [
-    { id: 1, name: 'Dr. Sarah Johnson', email: 'sarah.johnson@ecoguard.org', role: 'Administrator', status: 'Active', lastLogin: '2 hours ago' },
-    { id: 2, name: 'Mark Thompson', email: 'mark.thompson@forestry.gov', role: 'Analyst', status: 'Active', lastLogin: '1 day ago' },
-    { id: 3, name: 'Lisa Chen', email: 'lisa.chen@conservation.org', role: 'Viewer', status: 'Active', lastLogin: '3 days ago' },
-    { id: 4, name: 'James Wilson', email: 'james.wilson@mining.dept', role: 'Investigator', status: 'Inactive', lastLogin: '1 week ago' }
-  ];
+  // ── Fetch users ───────────────────────────────────────────────────────────
+  const fetchUsers = async () => {
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const res = await authFetch(apiUrl('/api/auth/users'));
+      if (!res.ok) throw new Error(`Server responded ${res.status}`);
+      const data = await res.json();
+      setUsers(data.users ?? []);
+    } catch (err: any) {
+      setUsersError(err.message ?? 'Failed to load users');
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'users') fetchUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  // ── Deactivate user ───────────────────────────────────────────────────────
+  const handleDeactivate = async (userId: string) => {
+    if (!window.confirm('Deactivate this user? They will no longer be able to log in.')) return;
+    try {
+      const res = await authFetch(apiUrl(`/api/auth/users/${userId}`), { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? 'Failed to deactivate user');
+      }
+      fetchUsers();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  // ── Create user ───────────────────────────────────────────────────────────
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    if (!form.full_name.trim()) { setFormError('Full name is required'); return; }
+    if (!form.email.trim()) { setFormError('Email is required'); return; }
+    if (form.password.length < 6) { setFormError('Password must be at least 6 characters'); return; }
+
+    setSubmitting(true);
+    try {
+      const res = await authFetch(apiUrl('/api/auth/users'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail ?? 'Failed to create user');
+      setShowModal(false);
+      setForm(EMPTY_FORM);
+      fetchUsers();
+    } catch (err: any) {
+      setFormError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openModal = () => { setForm(EMPTY_FORM); setFormError(null); setShowModal(true); };
+
+  const formatDate = (iso: string | null) => {
+    if (!iso) return 'Never';
+    return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+  };
 
   return (
     <div className="space-y-6">
@@ -53,54 +143,193 @@ const AdminPage: React.FC = () => {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-gray-900">User Management</h3>
-                <button className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                <button
+                  onClick={openModal}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                >
+                  <UserPlus className="h-4 w-4" />
                   Add New User
                 </button>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Login</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {mockUsers.map((user) => (
-                      <tr key={user.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">{user.name}</div>
-                            <div className="text-sm text-gray-500">{user.email}</div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="inline-flex px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
-                            {user.role}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                            user.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                          }`}>
-                            {user.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {user.lastLogin}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <button className="text-emerald-600 hover:text-emerald-700 mr-3">Edit</button>
-                          <button className="text-red-600 hover:text-red-700">Disable</button>
-                        </td>
+              {usersError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {usersError}
+                  <button onClick={fetchUsers} className="ml-3 underline">Retry</button>
+                </div>
+              )}
+
+              {usersLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="h-6 w-6 animate-spin mr-2" /> Loading users…
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Login</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {users.length === 0 && !usersLoading && (
+                        <tr>
+                          <td colSpan={5} className="px-6 py-8 text-center text-sm text-gray-500">No users found.</td>
+                        </tr>
+                      )}
+                      {users.map((u) => (
+                        <tr key={u.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">{u.full_name}</div>
+                              <div className="text-sm text-gray-500">{u.email}</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full capitalize ${
+                              u.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {u.role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                              u.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                            }`}>
+                              {u.is_active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {formatDate(u.last_login)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            {u.is_active && (
+                              <button
+                                onClick={() => handleDeactivate(u.id)}
+                                className="text-red-600 hover:text-red-700"
+                              >
+                                Deactivate
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Add User Modal ─────────────────────────────────────────────────── */}
+          {showModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              {/* backdrop */}
+              <div className="absolute inset-0 bg-black/40" onClick={() => setShowModal(false)} />
+
+              <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5">
+                {/* header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="h-5 w-5 text-emerald-600" />
+                    <h2 className="text-lg font-semibold text-gray-900">Add New User</h2>
+                  </div>
+                  <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                {formError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">
+                    {formError}
+                  </div>
+                )}
+
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  {/* Full name */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={form.full_name}
+                      onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                      placeholder="Jane Smith"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  {/* Email */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                    <input
+                      type="email"
+                      required
+                      value={form.email}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      placeholder="jane@ecoguard.ai"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  {/* Password */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={form.password}
+                        onChange={(e) => setForm({ ...form, password: e.target.value })}
+                        placeholder="Min. 6 characters"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 pr-16"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700 px-1"
+                      >
+                        {showPassword ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Role */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                    <select
+                      value={form.role}
+                      onChange={(e) => setForm({ ...form, role: e.target.value as 'admin' | 'employee' })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="employee">Employee</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+
+                  {/* actions */}
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowModal(false)}
+                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60 text-sm font-medium transition-colors"
+                    >
+                      {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {submitting ? 'Creating…' : 'Create User'}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}

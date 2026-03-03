@@ -1,0 +1,386 @@
+﻿"""
+JWT Authentication router for EcoGuard AI
+Users and sessions are stored in MySQL (users + user_sessions tables).
+
+Roles:
+  admin    - full access
+  employee - Dashboard, Flagged Areas, Reports, Account
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel
+
+from database.db_manager import get_db_manager
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+SECRET_KEY = os.environ.get(
+    "ECOGUARD_SECRET_KEY",
+    "ecoguard-ai-super-secret-key-change-in-production-2024",
+)
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
+
+# ---------------------------------------------------------------------------
+# Crypto helpers
+# ---------------------------------------------------------------------------
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+def _hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+
+def _hash_token(token: str) -> str:
+    """SHA-256 hash of a JWT for safe storage in user_sessions."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+def _db():
+    return get_db_manager()
+
+
+def _get_user_by_email(email: str) -> Optional[dict]:
+    rows = _db().execute_query(
+        "SELECT * FROM users WHERE email = %s AND is_active = TRUE LIMIT 1",
+        (email,),
+    )
+    return rows[0] if rows else None
+
+
+def _get_user_by_id(user_id: str) -> Optional[dict]:
+    rows = _db().execute_query(
+        "SELECT * FROM users WHERE id = %s AND is_active = TRUE LIMIT 1",
+        (user_id,),
+    )
+    return rows[0] if rows else None
+
+
+def _get_session(session_id: str) -> Optional[dict]:
+    rows = _db().execute_query(
+        "SELECT * FROM user_sessions WHERE id = %s LIMIT 1",
+        (session_id,),
+    )
+    return rows[0] if rows else None
+
+
+def _update_last_login(user_id: str) -> None:
+    _db().execute_query(
+        "UPDATE users SET last_login = %s WHERE id = %s",
+        (datetime.now(timezone.utc), user_id),
+        fetch=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Seed default users (runs once on startup if table is empty)
+# ---------------------------------------------------------------------------
+def _seed_default_users() -> None:
+    try:
+        rows = _db().execute_query("SELECT COUNT(*) AS cnt FROM users")
+        if rows and rows[0]["cnt"] > 0:
+            return
+        now = datetime.now(timezone.utc)
+        defaults = [
+            (str(uuid.uuid4()), "Administrator", "admin@ecoguard.ai",    "admin123",    "admin"),
+            (str(uuid.uuid4()), "Employee",      "employee@ecoguard.ai", "employee123", "employee"),
+        ]
+        for uid, full_name, email, password, role in defaults:
+            _db().execute_query(
+                """
+                INSERT INTO users
+                    (id, full_name, email, password_hash, role, is_active, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+                """,
+                (uid, full_name, email, _hash_password(password), role, now, now),
+                fetch=False,
+            )
+            logger.info("Seeded default user: %s (%s)", email, role)
+    except Exception as exc:
+        logger.warning("Could not seed default users (DB may not be ready): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# JWT helpers
+# ---------------------------------------------------------------------------
+def _create_access_token(
+    user_id: str,
+    role: str,
+    email: str,
+    session_id: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    payload = {
+        "sub": user_id,
+        "jti": session_id,
+        "role": role,
+        "email": email,
+        "exp": expire,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+# ---------------------------------------------------------------------------
+# Dependency: get_current_user
+# ---------------------------------------------------------------------------
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        session_id: str = payload.get("jti")
+        if not user_id or not session_id:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    session = _get_session(session_id)
+    if not session or session["is_revoked"]:
+        raise credentials_exception
+
+    user = _get_user_by_id(user_id)
+    if not user:
+        raise credentials_exception
+
+    user["_session_id"] = session_id
+    return user
+
+
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    role: str
+    email: str
+    full_name: str
+
+
+class UserInfo(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class CreateUserRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    role: str
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+_seed_default_users()
+
+
+@router.post("/login", response_model=Token)
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+):
+    """Authenticate with email + password and return a Bearer JWT."""
+    user = _get_user_by_email(form_data.username.strip().lower())
+    if not user or not _verify_password(form_data.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    session_id = str(uuid.uuid4())
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    token = _create_access_token(
+        user_id=str(user["id"]),
+        role=user["role"],
+        email=user["email"],
+        session_id=session_id,
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    _db().execute_query(
+        """
+        INSERT INTO user_sessions
+            (id, user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (%s, %s, %s, %s, %s, %s, FALSE)
+        """,
+        (session_id, str(user["id"]), _hash_token(token), ip, ua, expires_at),
+        fetch=False,
+    )
+    _update_last_login(str(user["id"]))
+
+    return Token(
+        access_token=token,
+        token_type="bearer",
+        role=user["role"],
+        email=user["email"],
+        full_name=user["full_name"],
+    )
+
+
+@router.post("/logout")
+async def logout(current_user: dict = Depends(get_current_user)):
+    """Revoke the current session so the JWT is immediately invalidated."""
+    _db().execute_query(
+        "UPDATE user_sessions SET is_revoked = TRUE WHERE id = %s",
+        (current_user["_session_id"],),
+        fetch=False,
+    )
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/me", response_model=UserInfo)
+async def me(current_user: dict = Depends(get_current_user)):
+    """Return the currently authenticated user profile."""
+    return UserInfo(
+        id=str(current_user["id"]),
+        email=current_user["email"],
+        full_name=current_user["full_name"],
+        role=current_user["role"],
+        is_active=bool(current_user["is_active"]),
+    )
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Allow any authenticated user to change their own password."""
+    if not _verify_password(body.current_password, current_user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    if len(body.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 6 characters",
+        )
+    _db().execute_query(
+        "UPDATE users SET password_hash = %s, updated_at = %s WHERE id = %s",
+        (_hash_password(body.new_password), datetime.now(timezone.utc), str(current_user["id"])),
+        fetch=False,
+    )
+    return {"message": "Password changed successfully"}
+
+
+# ---------------------------------------------------------------------------
+# Admin-only user management
+# ---------------------------------------------------------------------------
+@router.get("/users")
+async def list_users(admin: dict = Depends(require_admin)):
+    """List all users - admin only."""
+    rows = _db().execute_query(
+        "SELECT id, full_name, email, role, is_active, last_login, created_at FROM users ORDER BY created_at"
+    )
+    return {
+        "users": [
+            {
+                "id": str(r["id"]),
+                "full_name": r["full_name"],
+                "email": r["email"],
+                "role": r["role"],
+                "is_active": bool(r["is_active"]),
+                "last_login": r["last_login"].isoformat() if r["last_login"] else None,
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post("/users")
+async def create_user(
+    body: CreateUserRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Create a new user - admin only."""
+    if body.role not in ("admin", "employee"):
+        raise HTTPException(status_code=400, detail="Role must be admin or employee")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    email_lower = body.email.strip().lower()
+    if _get_user_by_email(email_lower):
+        raise HTTPException(status_code=400, detail="Email already exists")
+
+    now = datetime.now(timezone.utc)
+    uid = str(uuid.uuid4())
+    _db().execute_query(
+        """
+        INSERT INTO users (id, full_name, email, password_hash, role, is_active, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+        """,
+        (uid, body.full_name.strip(), email_lower, _hash_password(body.password), body.role, now, now),
+        fetch=False,
+    )
+    return {"message": f"User created", "id": uid, "email": email_lower, "role": body.role}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    """Soft-delete a user - admin only. Cannot deactivate yourself."""
+    if user_id == str(admin["id"]):
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    target = _get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    _db().execute_query(
+        "UPDATE users SET is_active = FALSE, updated_at = %s WHERE id = %s",
+        (datetime.now(timezone.utc), user_id),
+        fetch=False,
+    )
+    return {"message": f"User deactivated"}

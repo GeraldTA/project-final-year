@@ -26,6 +26,7 @@ ml_router = APIRouter(prefix="/api/ml", tags=["Machine Learning"])
 # Global detector instance (loaded on startup)
 detector: Optional[BigEarthNetForestChangeDetector] = None
 post_processor = None
+ml_loading: bool = False  # True while model is being downloaded/loaded
 
 # Paths
 MODEL_PATH = Path("models/best_model.pth")
@@ -36,9 +37,10 @@ DETECTIONS_DIR.mkdir(parents=True, exist_ok=True)
 def initialize_ml_system():
     """
     Initialize the ML detection system.
-    Called on app startup.
+    Called on app startup (runs in a background thread).
     """
-    global detector, post_processor
+    global detector, post_processor, ml_loading
+    ml_loading = True
 
     try:
         # Factory-ready path: use pretrained BigEarthNet weights (download on first run).
@@ -55,6 +57,8 @@ def initialize_ml_system():
         logger.error(f"Failed to initialize ML system: {e}")
         detector = None
         post_processor = None
+    finally:
+        ml_loading = False
 
 
 @ml_router.get("/status")
@@ -66,6 +70,7 @@ async def ml_status():
     """
     return {
         "model_loaded": detector is not None,
+        "ml_loading": ml_loading,
         "model_type": "bigearthnet-resnet50-s2" if detector is not None else None,
         "pretrained_repo": BIGEARTHNET_REPO_ID,
         "local_trained_model_path": str(MODEL_PATH),
@@ -222,13 +227,20 @@ async def detect_change_auto_internal(
             )
             logger.warning(seasonal_warning)
 
-        # Create date ranges: center the window around the specified dates
-        # For before_date, look back from that date
+        # Create date ranges: both before_date and after_date are treated as the
+        # END of their respective 30-day windows (look back from each date).
+        # This ensures both windows are always in the past and never query future imagery.
+        # before window: [before_date - window_days  →  before_date]
+        # after  window: [after_date  - window_days  →  after_date ]
         before_start = (datetime.fromisoformat(before_date) - timedelta(days=window_days)).strftime("%Y-%m-%d")
-        before_end = before_date
-        # For after_date, look forward from that date  
-        after_start = after_date
-        after_end = (datetime.fromisoformat(after_date) + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        before_end   = before_date
+        after_start  = (datetime.fromisoformat(after_date)  - timedelta(days=window_days)).strftime("%Y-%m-%d")
+        after_end    = after_date
+        # Safety: never let after_end exceed today (prevents future-date GEE queries)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if after_end > today_str:
+            after_end   = today_str
+            after_start = (datetime.now() - timedelta(days=window_days)).strftime("%Y-%m-%d")
 
         logger.info(
             "Auto-exporting Sentinel-2 composites: before=%s..%s (centered on %s) after=%s..%s (centered on %s)",
