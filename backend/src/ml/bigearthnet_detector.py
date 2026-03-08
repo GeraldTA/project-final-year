@@ -93,6 +93,10 @@ class BigEarthNetPrediction:
     bbox_wgs84: Optional[Dict[str, float]]
 
 
+# Path where the fine-tuned binary model will be saved after Colab training
+_LOCAL_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "models" / "deforestation_model.pth"
+
+
 class BigEarthNetForestChangeDetector:
     """Forest probability inference + change detection using BigEarthNet weights."""
 
@@ -103,6 +107,7 @@ class BigEarthNetForestChangeDetector:
         min_forest_before: float = 0.40,
         max_forest_after: float = 0.30,
         ndvi_drop_threshold: float = 0.10,
+        local_model_path: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.forest_drop_threshold = forest_drop_threshold
@@ -110,12 +115,42 @@ class BigEarthNetForestChangeDetector:
         self.max_forest_after = max_forest_after
         self.ndvi_drop_threshold = ndvi_drop_threshold
 
-        self.model = self._load_model().to(self.device)
+        # Resolve local model path: explicit arg > default backend/models/ location
+        resolved_local = Path(local_model_path) if local_model_path else _LOCAL_MODEL_PATH
+
+        if resolved_local.exists():
+            logger.info("Found fine-tuned model at %s — using it instead of HuggingFace", resolved_local)
+            self.model, self.is_binary = self._load_finetuned_model(resolved_local)
+        else:
+            logger.info("No local fine-tuned model found. Loading pretrained BigEarthNet from HuggingFace...")
+            self.model, self.is_binary = self._load_bigearthnet_model(), False
+
+        self.model = self.model.to(self.device)
         self.model.eval()
+        logger.info("BigEarthNet detector ready on %s (binary_mode=%s)", self.device, self.is_binary)
 
-        logger.info("BigEarthNet detector ready on %s", self.device)
+    def _load_finetuned_model(self, path: Path):
+        """Load a fine-tuned binary (Forest/Non-Forest) model from a .pth checkpoint."""
+        import torch as _torch
+        checkpoint = _torch.load(str(path), map_location="cpu")
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        num_classes    = checkpoint.get("num_classes", 2)
+        input_channels = checkpoint.get("input_channels", 4)
 
-    def _load_model(self) -> nn.Module:
+        model = resnet50(weights=None)
+        model.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        model.fc = nn.Sequential(
+            nn.Dropout(0.5),
+            nn.Linear(2048, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes)
+        )
+        model.load_state_dict(state_dict, strict=False)
+        logger.info("Fine-tuned model loaded — %d classes, %d input channels", num_classes, input_channels)
+        return model, True
+
+    def _load_bigearthnet_model(self) -> nn.Module:
         logger.info("Downloading/loading BigEarthNet weights: %s", BIGEARTHNET_REPO_ID)
         weights_path = hf_hub_download(BIGEARTHNET_REPO_ID, BIGEARTHNET_FILENAME)
         state = load_file(weights_path)
@@ -133,7 +168,6 @@ class BigEarthNetForestChangeDetector:
 
         missing, unexpected = model.load_state_dict(mapped, strict=False)
         if missing or unexpected:
-            # strict=False keeps us resilient across minor upstream changes.
             logger.warning("BigEarthNet weight load: missing=%d unexpected=%d", len(missing), len(unexpected))
         else:
             logger.info("BigEarthNet weights loaded cleanly")
@@ -157,64 +191,82 @@ class BigEarthNetForestChangeDetector:
             except Exception:
                 bbox = None
 
-        if arr.shape[0] < 10:
+        num_bands = arr.shape[0]
+        required  = 4 if self.is_binary else 10
+
+        if num_bands < required:
             raise ValueError(
-                "BigEarthNet S2 model requires 10 Sentinel-2 bands in one GeoTIFF (B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12). "
-                f"Got {arr.shape[0]} band(s) in {image_path}."
+                f"Model requires {required} Sentinel-2 bands. "
+                f"Got {num_bands} band(s) in {image_path}."
             )
 
-        # Take first 10 bands (expected to already be in the correct order)
-        arr10 = arr[:10].astype(np.float32)
+        arr_out = arr[:required].astype(np.float32)
 
         # Convert typical Sentinel-2 scaled reflectance (0..10000) to 0..1
-        if np.nanmax(arr10) > 1.5:
-            arr10 = arr10 / 10000.0
-        arr10 = np.clip(arr10, 0.0, 1.0)
+        if np.nanmax(arr_out) > 1.5:
+            arr_out = arr_out / 10000.0
+        arr_out = np.clip(arr_out, 0.0, 1.0)
 
-        return arr10, bbox
+        return arr_out, bbox
 
-    def _to_tensor_224(self, bands10: np.ndarray) -> torch.Tensor:
-        # bands10: (10, H, W)
-        t = torch.from_numpy(bands10).unsqueeze(0)  # (1, 10, H, W)
+    def _to_tensor_224(self, bands: np.ndarray) -> torch.Tensor:
+        # bands: (C, H, W)
+        t = torch.from_numpy(bands).unsqueeze(0)  # (1, C, H, W)
         if t.shape[-2:] != (224, 224):
             t = F.interpolate(t, size=(224, 224), mode="bilinear", align_corners=False)
         return t.to(self.device)
 
-    def _ndvi_mean(self, bands10: np.ndarray) -> float:
-        # Order: B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12
-        red = bands10[2]
-        nir = bands10[6]
+    def _ndvi_mean(self, bands: np.ndarray) -> float:
+        if self.is_binary:
+            # 4-band order: B4(Red), B3(Green), B2(Blue), B8(NIR)
+            red = bands[0]
+            nir = bands[3]
+        else:
+            # 10-band BigEarthNet order: B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12
+            red = bands[2]
+            nir = bands[6]
         denom = (nir + red) + 1e-6
         ndvi = (nir - red) / denom
         return float(np.nanmean(ndvi))
-    
-    def _greenness_score(self, bands10: np.ndarray) -> float:
+
+    def _greenness_score(self, bands: np.ndarray) -> float:
         """
         Calculate greenness using Green band intensity relative to Red/Blue.
         Higher green = more vegetation. This is a visual indicator.
         """
-        # B02=Blue, B03=Green, B04=Red
-        blue = bands10[0]
-        green = bands10[1]
-        red = bands10[2]
-        
-        # Greenness: high green relative to red and blue
-        # Normalized green index
+        if self.is_binary:
+            # 4-band order: B4(Red), B3(Green), B2(Blue), B8(NIR)
+            red   = bands[0]
+            green = bands[1]
+            blue  = bands[2]
+        else:
+            # 10-band BigEarthNet order: B02=Blue, B03=Green, B04=Red
+            blue  = bands[0]
+            green = bands[1]
+            red   = bands[2]
+
         green_dominance = green / (red + blue + 1e-6)
         return float(np.nanmean(green_dominance))
 
     def predict_from_file(self, image_path: str) -> Dict:
-        bands10, bbox = self._read_multiband(image_path)
-        ndvi_mean = self._ndvi_mean(bands10)
-        greenness = self._greenness_score(bands10)
-        x = self._to_tensor_224(bands10)
+        bands, bbox = self._read_multiband(image_path)
+        ndvi_mean = self._ndvi_mean(bands)
+        greenness = self._greenness_score(bands)
+        x = self._to_tensor_224(bands)
 
         with torch.no_grad():
             logits = self.model(x)
-            probs = torch.sigmoid(logits)[0].detach().cpu().numpy().astype(np.float32)
 
-        class_probs = {BIGEARTHNET_V2_CLASSES[i]: float(probs[i]) for i in range(len(BIGEARTHNET_V2_CLASSES))}
-        forest_prob = float(np.max([probs[i] for i in FOREST_INDICES])) if FOREST_INDICES else float(np.max(probs))
+            if self.is_binary:
+                # Fine-tuned binary model: class 0 = Forest, class 1 = Non-Forest
+                probs_bin   = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+                forest_prob = float(probs_bin[0])   # probability of being Forest
+                class_probs = {"Forest": float(probs_bin[0]), "Non-Forest": float(probs_bin[1])}
+            else:
+                # BigEarthNet 19-class model
+                probs = torch.sigmoid(logits)[0].detach().cpu().numpy().astype(np.float32)
+                class_probs = {BIGEARTHNET_V2_CLASSES[i]: float(probs[i]) for i in range(len(BIGEARTHNET_V2_CLASSES))}
+                forest_prob = float(np.max([probs[i] for i in FOREST_INDICES])) if FOREST_INDICES else float(np.max(probs))
 
         return BigEarthNetPrediction(
             forest_probability=forest_prob,
