@@ -23,14 +23,25 @@
         ]
       ],
       "created_at": "2026-03-01T11:40:13.977120",
-      "last_monitored": null,
+      "last_monitored": "2026-03-09T00:56:13.301677",
       "monitoring_enabled": true,
       "active_monitoring": true,
       "monitoring_interval_days": 5,
-      "detection_count": 0,
-      "detection_history": [],
+      "detection_count": 1,
+      "detection_history": [
+        {
+          "timestamp": "2026-03-09T00:56:13.301677",
+          "before_date": "2026-03-01",
+          "after_date": "2026-03-09",
+          "deforestation_detected": false,
+          "forest_loss_percent": -16.309773426991775,
+          "vegetation_trend": "stable",
+          "forest_cover_before": 1.419778447598219,
+          "forest_cover_after": 1.6513410955667496
+        }
+      ],
       "monitoring_started_date": "2026-03-01T11:40:28.022314",
-      "next_scheduled_detection": "2026-03-06T11:40:28"
+      "next_scheduled_detection": "2026-03-14T00:56:13.301677"
     },
     {
       "id": "80aa81c2-a728-4524-867a-061475d9c251",
@@ -132,11 +143,11 @@
       ],
       "description": "game park",
       "created_at": "2026-02-04T09:07:07.290562",
-      "last_monitored": "2026-02-04T12:34:44.472827",
+      "last_monitored": "2026-03-09T00:57:17.771161",
       "monitoring_enabled": true,
       "continuous_monitoring": true,
       "alert_enabled": true,
-      "detection_count": 0,
+      "detection_count": 10,
       "detection_history": [
         {
           "timestamp": "2026-02-04T09:16:57.929071",
@@ -209,11 +220,21 @@
           "deforestation_detected": false,
           "forest_loss_percent": 3.432260113040728,
           "vegetation_trend": "stable"
+        },
+        {
+          "timestamp": "2026-03-09T00:57:17.771161",
+          "before_date": "2026-02-04",
+          "after_date": "2026-03-09",
+          "deforestation_detected": false,
+          "forest_loss_percent": -4.7255449855306955,
+          "vegetation_trend": "growth",
+          "forest_cover_before": 1.542870793491602,
+          "forest_cover_after": 1.615779846906662
         }
       ],
       "active_monitoring": true,
       "monitoring_started_date": "2026-03-01T11:40:44.504444",
-      "next_scheduled_detection": "2026-03-06T11:40:44",
+      "next_scheduled_detection": "2026-03-14T00:57:17.771161",
       "monitoring_interval_days": 5
     },
     {
@@ -239,11 +260,11 @@
       ],
       "description": "",
       "created_at": "2026-02-04T09:31:53.830605",
-      "last_monitored": "2026-02-04T10:43:01.928955",
+      "last_monitored": "2026-03-09T00:59:01.997893",
       "monitoring_enabled": true,
       "continuous_monitoring": true,
       "alert_enabled": true,
-      "detection_count": 1,
+      "detection_count": 2,
       "detection_history": [
         {
           "timestamp": "2026-02-04T10:43:01.928966",
@@ -252,11 +273,21 @@
           "deforestation_detected": true,
           "forest_loss_percent": -661.4796580451377,
           "vegetation_trend": "decline"
+        },
+        {
+          "timestamp": "2026-03-09T00:59:01.997893",
+          "before_date": "2026-02-04",
+          "after_date": "2026-03-09",
+          "deforestation_detected": false,
+          "forest_loss_percent": 55.470259044307504,
+          "vegetation_trend": "stable",
+          "forest_cover_before": 3.4065332263708115,
+          "forest_cover_after": 1.5169204212725163
         }
       ],
       "active_monitoring": true,
       "monitoring_started_date": "2026-03-01T11:40:48.861382",
-      "next_scheduled_detection": "2026-03-06T11:40:48",
+      "next_scheduled_detection": "2026-03-14T00:59:01.997893",
       "monitoring_interval_days": 5
     },
     {
@@ -282,15 +313,26 @@
       ],
       "description": "",
       "created_at": "2026-02-04T12:19:37.660245",
-      "last_monitored": null,
+      "last_monitored": "2026-03-09T00:59:33.868041",
       "monitoring_enabled": true,
       "continuous_monitoring": true,
       "alert_enabled": true,
-      "detection_count": 0,
-      "detection_history": [],
+      "detection_count": 1,
+      "detection_history": [
+        {
+          "timestamp": "2026-03-09T00:59:33.868041",
+          "before_date": "2026-03-01",
+          "after_date": "2026-03-09",
+          "deforestation_detected": false,
+          "forest_loss_percent": 0.0,
+          "vegetation_trend": "stable",
+          "forest_cover_before": 1.3197212480008602,
+          "forest_cover_after": 1.3197212480008602
+        }
+      ],
       "active_monitoring": true,
       "monitoring_started_date": "2026-03-01T11:40:53.022170",
-      "next_scheduled_detection": "2026-03-06T11:40:53",
+      "next_scheduled_detection": "2026-03-14T00:59:33.868041",
       "monitoring_interval_days": 5
     },
     {
@@ -316,11 +358,11 @@
       ],
       "description": "",
       "created_at": "2026-02-05T16:22:22.251006",
-      "last_monitored": "2026-02-05T16:24:18.043000",
+      "last_monitored": "2026-03-09T01:00:12.968081",
       "monitoring_enabled": true,
       "continuous_monitoring": true,
       "alert_enabled": true,
-      "detection_count": 0,
+      "detection_count": 2,
       "detection_history": [
         {
           "timestamp": "2026-02-05T16:24:18.043014",
@@ -329,11 +371,21 @@
           "deforestation_detected": false,
           "forest_loss_percent": 8.606508485575691,
           "vegetation_trend": "growth"
+        },
+        {
+          "timestamp": "2026-03-09T01:00:12.968081",
+          "before_date": "2026-02-05",
+          "after_date": "2026-03-09",
+          "deforestation_detected": false,
+          "forest_loss_percent": 2.9209739225273186,
+          "vegetation_trend": "stable",
+          "forest_cover_before": 1.4550825580954552,
+          "forest_cover_after": 1.4125799760222435
         }
       ],
       "active_monitoring": true,
       "monitoring_started_date": "2026-03-01T11:40:57.147738",
-      "next_scheduled_detection": "2026-03-06T11:40:57",
+      "next_scheduled_detection": "2026-03-14T01:00:12.968081",
       "monitoring_interval_days": 5
     }
   ]

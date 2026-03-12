@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Settings, Bell, Shield, Database, Activity, X, UserPlus, Loader2 } from 'lucide-react';
+import { Users, Settings, Bell, Shield, Database, Activity, X, UserPlus, Loader2, AlertTriangle, CheckCircle, ClipboardCheck, MapPin } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiUrl } from '../utils/api';
 
@@ -11,6 +11,26 @@ interface ApiUser {
   is_active: boolean;
   last_login: string | null;
   created_at: string | null;
+}
+
+interface DeforestedAreaAlert {
+  id: string;
+  name: string;
+  description?: string;
+  last_monitored: string | null;
+  latest_forest_loss_percent: number | null;
+  detection_history?: {
+    deforestation_detected: boolean;
+    forest_loss_percent: number;
+    before_date: string;
+    after_date: string;
+  }[];
+}
+
+interface DispatchRecord {
+  respondedAt: string;
+  note: string;
+  respondedBy: string;
 }
 
 const EMPTY_FORM = { full_name: '', email: '', password: '', role: 'employee' as 'admin' | 'employee' };
@@ -30,6 +50,82 @@ const AdminPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  // ── Deforestation alerts state ────────────────────────────────────────────
+  const [deforestedAreas, setDeforestedAreas] = useState<DeforestedAreaAlert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [respondedAlerts, setRespondedAlerts] = useState<Record<string, DispatchRecord>>(() => {
+    try { return JSON.parse(localStorage.getItem('ecoguard_dispatched') ?? '{}'); } catch { return {}; }
+  });
+  const [respondingAlert, setRespondingAlert] = useState<string | null>(null);
+  const [dispatchNote, setDispatchNote] = useState('');
+
+  // ── Email notification preferences (stored in DB) ──────────────────────
+  const defaultPrefs = { adminEmail: '', onNewDetection: true, weeklyReport: false, monthlyReport: true, annualReport: false, smtpServer: 'smtp.gmail.com', smtpPort: 587, smtpUser: '', smtpPassword: '' };
+  const [emailPrefs, setEmailPrefs] = useState(defaultPrefs);
+  const [prefsLoading, setPrefsLoading] = useState(false);
+  const [prefsSaving, setPrefsSaving] = useState(false);
+  const [prefsSaved, setPrefsSaved] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
+  const [testEmailAddr, setTestEmailAddr] = useState('');
+  const [testEmailSending, setTestEmailSending] = useState(false);
+  const [testEmailResult, setTestEmailResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [showSmtpPassword, setShowSmtpPassword] = useState(false);
+
+  const fetchEmailPrefs = async () => {
+    setPrefsLoading(true);
+    setPrefsError(null);
+    try {
+      const res = await authFetch(apiUrl('/api/auth/notification-preferences'));
+      if (!res.ok) throw new Error(`Server responded ${res.status}`);
+      const data = await res.json();
+      setEmailPrefs({ ...defaultPrefs, ...data });
+    } catch (err: any) {
+      setPrefsError('Could not load preferences: ' + (err.message ?? 'Unknown error'));
+    } finally {
+      setPrefsLoading(false);
+    }
+  };
+
+  const saveEmailPrefs = async () => {
+    setPrefsSaving(true);
+    setPrefsError(null);
+    try {
+      const res = await authFetch(apiUrl('/api/auth/notification-preferences'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(emailPrefs),
+      });
+      if (!res.ok) throw new Error(`Server responded ${res.status}`);
+      setPrefsSaved(true);
+      setTimeout(() => setPrefsSaved(false), 2500);
+    } catch (err: any) {
+      setPrefsError('Could not save preferences: ' + (err.message ?? 'Unknown error'));
+    } finally {
+      setPrefsSaving(false);
+    }
+  };
+
+  const sendTestEmail = async () => {
+    const target = testEmailAddr.trim() || emailPrefs.adminEmail;
+    if (!target) { setTestEmailResult({ ok: false, msg: 'Enter an email address to test.' }); return; }
+    setTestEmailSending(true);
+    setTestEmailResult(null);
+    try {
+      const res = await authFetch(apiUrl('/api/auth/test-email'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toEmail: target }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail ?? `Server responded ${res.status}`);
+      setTestEmailResult({ ok: true, msg: data.message ?? `Test email sent to ${target}` });
+    } catch (err: any) {
+      setTestEmailResult({ ok: false, msg: err.message ?? 'Failed to send test email' });
+    } finally {
+      setTestEmailSending(false);
+    }
+  };
 
   const tabs = [
     { id: 'users', label: 'User Management', icon: Users },
@@ -56,8 +152,44 @@ const AdminPage: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'users') fetchUsers();
+    if (activeTab === 'alerts') { fetchDeforestedAreas(); fetchEmailPrefs(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  // ── Fetch deforested areas for alert panel ───────────────────────────────
+  const fetchDeforestedAreas = async () => {
+    setAlertsLoading(true);
+    try {
+      const res = await authFetch(apiUrl('/api/monitored-areas/grouped'));
+      if (!res.ok) throw new Error('Failed to fetch monitored areas');
+      const data = await res.json();
+      setDeforestedAreas(data.deforested ?? []);
+    } catch (e) {
+      console.error('Alert fetch error:', e);
+    } finally {
+      setAlertsLoading(false);
+    }
+  };
+
+  const markDispatched = (areaId: string) => {
+    const record: DispatchRecord = {
+      respondedAt: new Date().toISOString(),
+      note: dispatchNote.trim(),
+      respondedBy: 'Admin',
+    };
+    const updated = { ...respondedAlerts, [areaId]: record };
+    setRespondedAlerts(updated);
+    localStorage.setItem('ecoguard_dispatched', JSON.stringify(updated));
+    setRespondingAlert(null);
+    setDispatchNote('');
+  };
+
+  const unmarkDispatched = (areaId: string) => {
+    const updated = { ...respondedAlerts };
+    delete updated[areaId];
+    setRespondedAlerts(updated);
+    localStorage.setItem('ecoguard_dispatched', JSON.stringify(updated));
+  };
 
   // ── Deactivate user ───────────────────────────────────────────────────────
   const handleDeactivate = async (userId: string) => {
@@ -271,7 +403,7 @@ const AdminPage: React.FC = () => {
                       required
                       value={form.email}
                       onChange={(e) => setForm({ ...form, email: e.target.value })}
-                      placeholder="jane@ecoguard.ai"
+                      placeholder="jane@example.com"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
@@ -412,43 +544,357 @@ const AdminPage: React.FC = () => {
           {activeTab === 'alerts' && (
             <div className="space-y-6">
               <h3 className="text-lg font-semibold text-gray-900">Alert Configuration</h3>
-              
-              <div className="space-y-4">
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium text-gray-900 mb-3">Notification Channels</h4>
-                  <div className="space-y-3">
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" defaultChecked className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">Email notifications</span>
-                    </label>
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" defaultChecked className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">SMS alerts for critical cases</span>
-                    </label>
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">Webhook notifications</span>
-                    </label>
-                  </div>
+
+              {/* ── Deforestation Alert Panel ───────────────────────────── */}
+              <div className="bg-white border border-red-200 rounded-lg overflow-hidden shadow-sm">
+                <div className="bg-red-700 text-white px-5 py-3 flex items-center gap-3">
+                  <AlertTriangle className="h-5 w-5 text-red-200 flex-shrink-0" />
+                  <h4 className="font-bold text-base">Deforestation Alerts</h4>
+                  <span className="ml-auto text-sm font-medium bg-red-800 px-2 py-0.5 rounded-full">
+                    {deforestedAreas.length} active alert{deforestedAreas.length !== 1 ? 's' : ''}
+                  </span>
+                  <button
+                    onClick={fetchDeforestedAreas}
+                    className="ml-2 text-red-200 hover:text-white text-xs underline"
+                  >
+                    Refresh
+                  </button>
                 </div>
 
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium text-gray-900 mb-3">Alert Recipients</h4>
-                  <div className="space-y-2">
+                {alertsLoading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-500">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading alerts…
+                  </div>
+                ) : deforestedAreas.length === 0 ? (
+                  <div className="px-5 py-10 text-center text-gray-500 text-sm">
+                    <CheckCircle className="h-10 w-10 text-green-400 mx-auto mb-3" />
+                    No deforestation alerts at this time. All monitored areas are clean.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {deforestedAreas.map(area => {
+                      const dispatched = respondedAlerts[area.id];
+                      const latestDetection = area.detection_history?.[0];
+                      const forestLoss = latestDetection?.forest_loss_percent ?? area.latest_forest_loss_percent ?? 0;
+                      const isResponding = respondingAlert === area.id;
+
+                      return (
+                        <div
+                          key={area.id}
+                          className={`p-4 ${dispatched ? 'bg-green-50' : 'bg-red-50'}`}
+                        >
+                          {/* Alert header */}
+                          <div className="flex items-start gap-3">
+                            <div className="flex-shrink-0 mt-0.5">
+                              {dispatched
+                                ? <CheckCircle className="h-5 w-5 text-green-600" />
+                                : <AlertTriangle className="h-5 w-5 text-red-600" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-gray-900">{area.name}</span>
+                                {dispatched ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    <ClipboardCheck className="h-3 w-3" /> Responded &amp; Dispatched
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                    <AlertTriangle className="h-3 w-3" /> Awaiting Response
+                                  </span>
+                                )}
+                              </div>
+                              {area.description && (
+                                <p className="text-xs text-gray-500 mt-0.5">{area.description}</p>
+                              )}
+                              <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-gray-600">
+                                {forestLoss > 0 && (
+                                  <span className="text-red-700 font-medium">
+                                    Forest Loss: {forestLoss.toFixed(2)}%
+                                  </span>
+                                )}
+                                {latestDetection?.before_date && (
+                                  <span>
+                                    Detection: {new Date(latestDetection.before_date).toLocaleDateString()} → {new Date(latestDetection.after_date).toLocaleDateString()}
+                                  </span>
+                                )}
+                                {area.last_monitored && (
+                                  <span>
+                                    Last scan: {new Date(area.last_monitored).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Dispatched info */}
+                              {dispatched && (
+                                <div className="mt-2 bg-green-100 border border-green-200 rounded px-3 py-2 text-xs text-green-800">
+                                  <span className="font-semibold">Response recorded</span> by {dispatched.respondedBy} on {new Date(dispatched.respondedAt).toLocaleString()}
+                                  {dispatched.note && (
+                                    <p className="mt-1 text-green-700">Note: {dispatched.note}</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action buttons */}
+                            <div className="flex-shrink-0 flex flex-col gap-1.5">
+                              {!dispatched && !isResponding && (
+                                <button
+                                  onClick={() => { setRespondingAlert(area.id); setDispatchNote(''); }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
+                                >
+                                  <ClipboardCheck className="h-3.5 w-3.5" />
+                                  Mark Responded
+                                </button>
+                              )}
+                              {dispatched && (
+                                <button
+                                  onClick={() => unmarkDispatched(area.id)}
+                                  className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors"
+                                >
+                                  Undo
+                                </button>
+                              )}
+                              <a
+                                href="/map"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 transition-colors"
+                              >
+                                <MapPin className="h-3.5 w-3.5" />
+                                View on Map
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* Inline dispatch form */}
+                          {isResponding && (
+                            <div className="mt-3 ml-8 border border-emerald-200 rounded-lg p-3 bg-white space-y-2">
+                              <p className="text-xs font-semibold text-gray-700">Confirm field response &amp; dispatch</p>
+                              <textarea
+                                rows={2}
+                                placeholder="Optional: add notes (team dispatched, ETA, contact person…)"
+                                value={dispatchNote}
+                                onChange={e => setDispatchNote(e.target.value)}
+                                className="w-full text-xs border border-gray-300 rounded px-2 py-1.5 focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => markDispatched(area.id)}
+                                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 transition-colors"
+                                >
+                                  <CheckCircle className="h-3.5 w-3.5" />
+                                  Confirm — Team Dispatched
+                                </button>
+                                <button
+                                  onClick={() => setRespondingAlert(null)}
+                                  className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {/* ── Email Notification Preferences ─────────────────────── */}
+              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                <div className="bg-gray-700 text-white px-5 py-3 flex items-center gap-3">
+                  <Bell className="h-5 w-5 text-gray-300 flex-shrink-0" />
+                  <h4 className="font-bold text-base">Email Notification Preferences</h4>
+                </div>
+                <div className="p-5 space-y-5">
+
+                  {prefsLoading ? (
+                    <div className="flex items-center justify-center py-8 text-gray-500">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading preferences…
+                    </div>
+                  ) : (<>
+
+                  {/* Admin email address */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Admin Email Address
+                      <span className="ml-1 text-xs font-normal text-gray-500">(reports &amp; alerts will be sent here)</span>
+                    </label>
                     <input
                       type="email"
-                      placeholder="Add email address..."
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      placeholder="e.g. admin@example.com"
+                      value={emailPrefs.adminEmail}
+                      onChange={e => setEmailPrefs({ ...emailPrefs, adminEmail: e.target.value })}
+                      className="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
-                    <div className="flex flex-wrap gap-2">
-                      {['forestry@gov.zw', 'alerts@conservation.org', 'emergency@mining.dept'].map((email) => (
-                        <span key={email} className="inline-flex items-center px-2 py-1 bg-emerald-100 text-emerald-700 text-xs rounded-full">
-                          {email}
-                          <button className="ml-1 text-emerald-500 hover:text-emerald-700">×</button>
-                        </span>
-                      ))}
+                  </div>
+
+                  {/* Instant detection alert */}
+                  <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+                    <h5 className="text-sm font-semibold text-amber-900 mb-3">🛰️ Detection Alerts</h5>
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={emailPrefs.onNewDetection}
+                        onChange={e => setEmailPrefs({ ...emailPrefs, onNewDetection: e.target.checked })}
+                        className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="text-sm font-medium text-gray-800">Send email immediately when a new deforestation is detected</span>
+                        <p className="text-xs text-gray-500 mt-0.5">You will receive an alert email as soon as the ML model flags a new area with deforestation.</p>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Periodic reports */}
+                  <div className="border border-blue-200 bg-blue-50 rounded-lg p-4">
+                    <h5 className="text-sm font-semibold text-blue-900 mb-3">📋 Periodic Report Emails</h5>
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={emailPrefs.weeklyReport}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, weeklyReport: e.target.checked })}
+                          className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">Weekly summary report</span>
+                          <p className="text-xs text-gray-500 mt-0.5">A weekly digest of all detections, scans performed, and area status changes.</p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={emailPrefs.monthlyReport}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, monthlyReport: e.target.checked })}
+                          className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">Monthly summary report</span>
+                          <p className="text-xs text-gray-500 mt-0.5">A monthly overview of forest cover trends, total deforested areas, and response records.</p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={emailPrefs.annualReport}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, annualReport: e.target.checked })}
+                          className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">Annual report</span>
+                          <p className="text-xs text-gray-500 mt-0.5">A full annual deforestation analysis report sent at the end of each year.</p>
+                        </div>
+                      </label>
                     </div>
                   </div>
+
+                  {/* SMTP configuration */}
+                  <div className="border border-gray-200 bg-gray-50 rounded-lg p-4">
+                    <h5 className="text-sm font-semibold text-gray-800 mb-3">⚙️ SMTP Configuration</h5>
+                    <p className="text-xs text-gray-500 mb-3">
+                      For Gmail, use <strong>smtp.gmail.com</strong> port <strong>587</strong> with your Gmail address and a{' '}
+                      <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">Gmail App Password</a>{' '}
+                      (requires 2-Step Verification enabled on your Google account).
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">SMTP Server</label>
+                        <input
+                          type="text"
+                          value={emailPrefs.smtpServer}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, smtpServer: e.target.value })}
+                          placeholder="smtp.gmail.com"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">SMTP Port</label>
+                        <input
+                          type="number"
+                          value={emailPrefs.smtpPort}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, smtpPort: parseInt(e.target.value) || 587 })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">SMTP Username (Gmail address)</label>
+                        <input
+                          type="email"
+                          value={emailPrefs.smtpUser}
+                          onChange={e => setEmailPrefs({ ...emailPrefs, smtpUser: e.target.value })}
+                          placeholder="you@gmail.com"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">App Password</label>
+                        <div className="relative">
+                          <input
+                            type={showSmtpPassword ? 'text' : 'password'}
+                            value={emailPrefs.smtpPassword}
+                            onChange={e => setEmailPrefs({ ...emailPrefs, smtpPassword: e.target.value })}
+                            placeholder="Gmail App Password"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 pr-14"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowSmtpPassword(p => !p)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700 px-1"
+                          >
+                            {showSmtpPassword ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Send Test Email */}
+                  <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-4">
+                    <h5 className="text-sm font-semibold text-indigo-900 mb-2">📧 Send Test Email</h5>
+                    <p className="text-xs text-gray-600 mb-3">Save your SMTP settings first, then send a test detection-alert email to verify everything is working.</p>
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <input
+                        type="email"
+                        value={testEmailAddr}
+                        onChange={e => setTestEmailAddr(e.target.value)}
+                        placeholder={emailPrefs.adminEmail || 'recipient@example.com'}
+                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        onClick={sendTestEmail}
+                        disabled={testEmailSending || prefsSaving}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition-colors whitespace-nowrap"
+                      >
+                        {testEmailSending && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {testEmailSending ? 'Sending…' : 'Send Test Email'}
+                      </button>
+                    </div>
+                    {testEmailResult && (
+                      <p className={`mt-2 text-sm font-medium ${testEmailResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {testEmailResult.ok ? '✓ ' : '✗ '}{testEmailResult.msg}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Save button */}
+                  {prefsError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">{prefsError}</div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={saveEmailPrefs}
+                      disabled={prefsSaving || prefsLoading}
+                      className="inline-flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                    >
+                      {prefsSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {prefsSaving ? 'Saving…' : 'Save Preferences'}
+                    </button>
+                    {prefsSaved && (
+                      <span className="text-sm text-emerald-600 font-medium">✓ Saved to database</span>
+                    )}
+                  </div>
+                  </>)}
                 </div>
               </div>
             </div>
@@ -603,47 +1049,6 @@ const AdminPage: React.FC = () => {
             <div className="space-y-6">
               <h3 className="text-lg font-semibold text-gray-900">Alert Configuration</h3>
               
-              <div className="space-y-4">
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium text-gray-900 mb-3">Severity Thresholds</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm text-gray-600 mb-1">Critical (hectares)</label>
-                      <input type="number" defaultValue="50" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-600 mb-1">High (hectares)</label>
-                      <input type="number" defaultValue="20" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-600 mb-1">Medium (hectares)</label>
-                      <input type="number" defaultValue="10" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-600 mb-1">Low (hectares)</label>
-                      <input type="number" defaultValue="5" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium text-gray-900 mb-3">Notification Settings</h4>
-                  <div className="space-y-3">
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" defaultChecked className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">Send immediate alerts for critical cases</span>
-                    </label>
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" defaultChecked className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">Daily summary reports</span>
-                    </label>
-                    <label className="flex items-center space-x-2">
-                      <input type="checkbox" className="rounded border-gray-300 text-emerald-600" />
-                      <span className="text-sm">Weekly trend analysis</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
 

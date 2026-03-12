@@ -384,3 +384,226 @@ async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
         fetch=False,
     )
     return {"message": f"User deactivated"}
+
+
+# ---------------------------------------------------------------------------
+# Notification preferences (stored in system_metadata)
+# ---------------------------------------------------------------------------
+_NOTIF_KEY = "admin_notification_preferences"
+
+
+@router.get("/notification-preferences")
+async def get_notification_preferences(admin: dict = Depends(require_admin)):
+    """Return the admin email notification preferences from the database."""
+    import json as _json
+    rows = _db().execute_query(
+        "SELECT value_data FROM system_metadata WHERE key_name = %s LIMIT 1",
+        (_NOTIF_KEY,),
+    )
+    if not rows:
+        return {
+            "adminEmail": admin.get("email", ""),
+            "onNewDetection": True,
+            "weeklyReport": False,
+            "monthlyReport": True,
+            "annualReport": False,
+        }
+    raw = rows[0]["value_data"]
+    if isinstance(raw, str):
+        return _json.loads(raw)
+    return raw
+
+
+class NotificationPrefsRequest(BaseModel):
+    adminEmail: str
+    onNewDetection: bool
+    weeklyReport: bool
+    monthlyReport: bool
+    annualReport: bool
+    smtpServer: str = "smtp.gmail.com"
+    smtpPort: int = 587
+    smtpUser: str = ""
+    smtpPassword: str = ""
+
+
+@router.put("/notification-preferences")
+async def save_notification_preferences(
+    body: NotificationPrefsRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Persist admin email notification preferences to system_metadata."""
+    import json as _json
+    value = _json.dumps(body.dict())
+    existing = _db().execute_query(
+        "SELECT id FROM system_metadata WHERE key_name = %s LIMIT 1",
+        (_NOTIF_KEY,),
+    )
+    if existing:
+        _db().execute_query(
+            "UPDATE system_metadata SET value_data = %s, updated_at = %s WHERE key_name = %s",
+            (value, datetime.now(timezone.utc), _NOTIF_KEY),
+            fetch=False,
+        )
+    else:
+        _db().execute_query(
+            "INSERT INTO system_metadata (key_name, value_data) VALUES (%s, %s)",
+            (_NOTIF_KEY, value),
+            fetch=False,
+        )
+    return {"message": "Preferences saved", "data": body.dict()}
+
+
+# ---------------------------------------------------------------------------
+# Shared helper — send a detection-alert email via stored SMTP credentials
+# ---------------------------------------------------------------------------
+def _send_notification_email(
+    to_address: str,
+    subject: str,
+    html_body: str,
+    prefs: dict,
+) -> None:
+    """Send an email using the SMTP settings stored in notification preferences."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    smtp_server = prefs.get("smtpServer", "smtp.gmail.com")
+    smtp_port = int(prefs.get("smtpPort", 587))
+    smtp_user = prefs.get("smtpUser", "")
+    smtp_password = prefs.get("smtpPassword", "")
+
+    if not smtp_user or not smtp_password:
+        raise ValueError("SMTP credentials are not configured. Set smtpUser and smtpPassword in Email Preferences.")
+
+    # Use adminEmail as the human-readable From address so it doesn't look like
+    # a machine address and avoids spam filters. Fall back to smtp_user.
+    admin_email = prefs.get("adminEmail", "").strip() or smtp_user
+    from_header = f"ML Deforestation Monitoring System <{admin_email}>"
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = from_header
+    msg["To"] = to_address
+    msg["Subject"] = subject
+    msg["Reply-To"] = admin_email
+    msg.attach(MIMEText(html_body, "html"))
+
+    with smtplib.SMTP(smtp_server, smtp_port, timeout=15) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.sendmail(smtp_user, to_address, msg.as_string())
+
+
+def _get_prefs() -> dict:
+    """Load notification preferences from DB (returns defaults if not set)."""
+    import json as _json
+    rows = _db().execute_query(
+        "SELECT value_data FROM system_metadata WHERE key_name = %s LIMIT 1",
+        (_NOTIF_KEY,),
+    )
+    if not rows:
+        return {}
+    raw = rows[0]["value_data"]
+    if isinstance(raw, str):
+        return _json.loads(raw)
+    return raw or {}
+
+
+# ---------------------------------------------------------------------------
+# Shared email builder — uses real DB data
+# ---------------------------------------------------------------------------
+def _build_detection_email_html(areas: list, is_test: bool = False) -> str:
+    """Build an HTML email body from real deforestation detection records."""
+    now_str = datetime.now().strftime("%B %d, %Y at %H:%M UTC")
+    intro = (
+        "This is a <strong>test alert</strong> showing your latest real deforestation data."
+        if is_test else
+        "New deforestation has been detected in the following monitored areas."
+    )
+
+    rows_html = ""
+    for area in areas:
+        loss = float(area.get("forest_loss_percent") or 0)
+        cover_before = float(area.get("forest_cover_before") or 0)
+        cover_after  = float(area.get("forest_cover_after") or 0)
+        before_date  = str(area.get("before_date") or "")
+        after_date   = str(area.get("after_date") or "")
+        trend        = str(area.get("vegetation_trend") or "decline").title()
+        name         = area.get("name") or "Unknown Area"
+        last_mon     = str(area.get("last_monitored") or "")[:10]
+
+        rows_html += f"""
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:16px;margin:12px 0;">
+          <p style="margin:0 0 8px 0;font-weight:bold;font-size:15px;color:#991b1b;">&#9888; {name}</p>
+          <table style="width:100%;font-size:13px;color:#374151;border-collapse:collapse;">
+            <tr><td style="padding:3px 0;font-weight:600;width:180px;">Forest Loss:</td>
+                <td style="color:#dc2626;font-weight:bold;">{loss:.2f}%</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Forest Cover Before:</td>
+                <td>{cover_before:.4f} km&sup2;</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Forest Cover After:</td>
+                <td>{cover_after:.4f} km&sup2;</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Vegetation Trend:</td>
+                <td>{trend}</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Detection Period:</td>
+                <td>{before_date} &rarr; {after_date}</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Last Monitored:</td>
+                <td>{last_mon}</td></tr>
+            <tr><td style="padding:3px 0;font-weight:600;">Status:</td>
+                <td><span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px;">Awaiting Response</span></td></tr>
+          </table>
+        </div>"""
+
+    if not rows_html:
+        rows_html = "<p style='color:#6b7280;'>No deforestation records found in the database yet.</p>"
+
+    return f"""
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;background:#f9fafb;padding:24px;border-radius:8px;">
+      <div style="background:#b91c1c;color:#fff;padding:16px 20px;border-radius:6px 6px 0 0;">
+        <h2 style="margin:0;font-size:18px;">&#9888; DEFORESTATION DETECTION ALERT</h2>
+        <p style="margin:6px 0 0 0;font-size:13px;opacity:0.85;">ML Deforestation Monitoring System &mdash; {now_str}</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;padding:20px;border-radius:0 0 6px 6px;">
+        <p style="color:#374151;font-size:14px;">{intro}</p>
+        {rows_html}
+        <p style="color:#6b7280;font-size:12px;margin-top:20px;border-top:1px solid #e5e7eb;padding-top:12px;">
+          This is an automated alert from the ML Deforestation Monitoring System.<br/>
+          Log in to the system to view full details, satellite images, and respond to alerts.
+        </p>
+      </div>
+    </div>"""
+
+
+def _fetch_deforested_areas() -> list:
+    """Query the real deforested areas with their latest detection data."""
+    return _db().execute_query("""
+        SELECT ma.id, ma.name, ma.last_monitored, ma.detection_count,
+               dh.forest_loss_percent, dh.forest_cover_before, dh.forest_cover_after,
+               dh.before_date, dh.after_date, dh.vegetation_trend
+        FROM monitored_areas ma
+        JOIN detection_history dh ON dh.area_id = ma.id
+        WHERE dh.deforestation_detected = 1
+        ORDER BY dh.timestamp DESC
+    """) or []
+
+
+# ---------------------------------------------------------------------------
+# Test email endpoint
+# ---------------------------------------------------------------------------
+class TestEmailRequest(BaseModel):
+    toEmail: str
+
+
+@router.post("/test-email")
+async def send_test_email(body: TestEmailRequest, admin: dict = Depends(require_admin)):
+    """Send a test detection-alert email using real data from the database."""
+    prefs = _get_prefs()
+    areas = _fetch_deforested_areas()
+    subject = f"ML Deforestation Monitoring System — Detection Alert ({len(areas)} area(s) flagged)"
+    html_body = _build_detection_email_html(areas, is_test=True)
+    try:
+        _send_notification_email(body.toEmail, subject, html_body, prefs)
+        return {"message": f"Test email sent to {body.toEmail} with {len(areas)} real detection(s)"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")

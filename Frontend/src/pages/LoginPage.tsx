@@ -66,7 +66,7 @@ const LoginPage: React.FC = () => {
             <div className="p-3 bg-theme-primary/10 rounded-2xl mb-4">
               <Satellite className="h-10 w-10 text-theme-primary" />
             </div>
-            <h1 className="text-2xl font-bold text-theme-text-primary">EcoGuard AI</h1>
+            <h1 className="text-2xl font-bold text-theme-text-primary">ML Deforestation Monitoring System</h1>
             <p className="text-sm text-theme-text-secondary mt-1">Environmental Protection System</p>
           </div>
 

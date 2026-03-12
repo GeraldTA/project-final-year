@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { TrendingUp, AlertTriangle, MapPin, Activity, ArrowRight, Eye } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell } from 'recharts';
 import { useData } from '../context/DataContext';
 import { apiFetch } from '../utils/api';
 
@@ -155,49 +155,83 @@ const HomePage: React.FC = () => {
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Trends Chart */}
+        {/* Activity Trends Chart */}
         <div className="bg-theme-card rounded-lg p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-theme-text-primary mb-4">Activity Trends</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={detectionData.trendsData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="week" />
-              <YAxis />
-              <Tooltip />
-              <Line 
-                type="monotone" 
-                dataKey="deforestation" 
-                stroke="#DC2626" 
-                strokeWidth={2}
-                name="Deforestation (ha)"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="mining" 
-                stroke="#2563EB" 
-                strokeWidth={2}
-                name="Mining (ha)"
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <h3 className="text-lg font-semibold text-theme-text-primary mb-1">Activity Trends</h3>
+          <p className="text-xs text-theme-text-secondary mb-4">Forest loss (%) detected per week across all monitored areas</p>
+          {detectionData.trendsData.length === 0 ? (
+            <div className="flex items-center justify-center h-[300px] text-theme-text-secondary text-sm">
+              No detection history yet. Start monitoring areas to see trends.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={detectionData.trendsData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value: number, name: string) => [
+                  name === 'deforestation' ? `${value}%` : value,
+                  name === 'deforestation' ? 'Forest Loss (%)' : 'Scans'
+                ]} />
+                <Legend formatter={(value) => value === 'deforestation' ? 'Forest Loss (%)' : 'Scans'} />
+                <Line
+                  type="monotone"
+                  dataKey="deforestation"
+                  stroke="#DC2626"
+                  strokeWidth={2}
+                  dot={{ r: 4 }}
+                  activeDot={{ r: 6 }}
+                  name="deforestation"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="scans"
+                  stroke="#2563EB"
+                  strokeWidth={2}
+                  strokeDasharray="4 2"
+                  dot={{ r: 3 }}
+                  name="scans"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
-        {/* Risk Zones Chart */}
+        {/* Risk Zone Distribution Chart */}
         <div className="bg-theme-card rounded-lg p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-theme-text-primary mb-4">Risk Zone Distribution</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={detectionData.riskZones}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Bar 
-                dataKey="area" 
-                fill="#059669"
-                name="Area (hectares)"
-              />
-            </BarChart>
-          </ResponsiveContainer>
+          <h3 className="text-lg font-semibold text-theme-text-primary mb-1">Risk Zone Distribution</h3>
+          <p className="text-xs text-theme-text-secondary mb-4">Monitored areas ranked by deforestation risk level</p>
+          {detectionData.riskZones.length === 0 ? (
+            <div className="flex items-center justify-center h-[300px] text-theme-text-secondary text-sm">
+              No monitored areas with detection history yet.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={detectionData.riskZones} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" tick={{ fontSize: 11 }} unit=" ha" />
+                <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value: number) => [`${value} ha`, 'Area']} />
+                <Bar dataKey="area" name="Area (ha)" radius={[0, 4, 4, 0]}>
+                  {detectionData.riskZones.map((zone: any) => {
+                    const colour =
+                      zone.riskLevel === 'critical' ? '#DC2626' :
+                      zone.riskLevel === 'high'     ? '#EA580C' :
+                      zone.riskLevel === 'medium'   ? '#D97706' : '#059669';
+                    return <Cell key={zone.id} fill={colour} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+          {/* Legend */}
+          <div className="flex gap-4 mt-3 text-xs text-theme-text-secondary">
+            {([['bg-red-600','Critical'],['bg-orange-600','High'],['bg-amber-600','Medium'],['bg-emerald-600','Low']] as const).map(([cls, label]) => (
+              <span key={label} className="flex items-center gap-1">
+                <span className={`inline-block w-3 h-3 rounded-sm ${cls}`} />{label}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -83,7 +83,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   <Satellite className="h-6 w-6 text-theme-primary" />
                 </div>
                 <div>
-                  <h1 className="text-xl font-bold text-theme-text-primary">EcoGuard AI</h1>
+                  <h1 className="text-xl font-bold text-theme-text-primary">ML Deforestation Monitoring System</h1>
                   <p className="text-sm text-theme-text-secondary">Environmental Protection System</p>
                 </div>
               </Link>

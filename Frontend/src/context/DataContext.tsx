@@ -39,32 +39,54 @@ export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
   const refreshData = async () => {
     setLoading(true);
     try {
-      // Fetch real detection data from backend
-      const alertsResponse = await apiFetch('/api/detection/alerts?limit=50');
-      const reportResponse = await apiFetch('/api/detection/report');
-      
-      if (alertsResponse.ok && reportResponse.ok) {
-        const alertsData = await alertsResponse.json();
-        const reportData = await reportResponse.json();
-        
-        // Convert backend alert format to frontend Alert type
-        const convertedAlerts: Alert[] = alertsData.alerts.map((alert: any) => ({
-          ...alert,
-          detectedAt: new Date(alert.detectedAt)
-        }));
-        
-        // Build detection data from report
-        const stats = reportData.deforestation_statistics;
+      // Fetch monitored-areas grouped data and dashboard chart data in parallel
+      const [areasRes, chartsRes] = await Promise.all([
+        apiFetch('/api/monitored-areas/grouped'),
+        apiFetch('/api/dashboard/charts'),
+      ]);
+
+      if (areasRes.ok && chartsRes.ok) {
+        const areasData  = await areasRes.json();
+        const chartsData = await chartsRes.json();
+
+        // Build alerts from deforested areas' detection history
+        const convertedAlerts: Alert[] = [];
+        for (const area of (areasData.deforested || [])) {
+          for (const record of (area.detection_history || [])) {
+            if (record.deforestation_detected) {
+              convertedAlerts.push({
+                id:          `${area.id}-${record.timestamp || record.after_date}`,
+                type:        'deforestation',
+                severity:    (record.forest_loss_percent || 0) >= 40 ? 'critical'
+                              : (record.forest_loss_percent || 0) >= 20 ? 'high'
+                              : (record.forest_loss_percent || 0) >= 5  ? 'medium' : 'low',
+                location:    area.name,
+                description: `Forest loss of ${Math.abs(record.forest_loss_percent || 0).toFixed(1)}% detected`,
+                detectedAt:  new Date(record.after_date || record.timestamp || Date.now()),
+                status:      'active',
+                coordinates: area.coordinates?.[0]
+                              ? { lat: area.coordinates[0][1], lng: area.coordinates[0][0] }
+                              : undefined,
+              } as Alert);
+            }
+          }
+        }
+
+        // Totals from grouped summary
+        const totals     = areasData.totals || {};
+        const totalAreas = totals.total || 0;
+
         const newDetectionData: DetectionData = {
-          totalArea: (reportData.coordinates.east - reportData.coordinates.west) * 
-                     (reportData.coordinates.north - reportData.coordinates.south) * 12321, // km² to hectares
-          deforestedArea: stats.deforestation_area_hectares,
-          miningArea: 0, // Not tracked separately in current system
-          activeIncidents: alertsData.total_detections,
-          trendsData: [], // Would need historical data
-          riskZones: [] // Would need risk analysis
+          totalArea:       totalAreas * 500,         // rough average 500 ha per area
+          deforestedArea:  chartsData.riskZones
+                             .filter((z: any) => z.riskLevel === 'critical' || z.riskLevel === 'high')
+                             .reduce((sum: number, z: any) => sum + z.area, 0),
+          miningArea:      0,
+          activeIncidents: convertedAlerts.length,
+          trendsData:      chartsData.trendsData,
+          riskZones:       chartsData.riskZones,
         };
-        
+
         setAlerts(convertedAlerts);
         setDetectionData(newDetectionData);
       } else {

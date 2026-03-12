@@ -168,6 +168,108 @@ def get_test_ndvi_tiles():
         return FileResponse(str(test_file), media_type="text/html")
     return Response("NDVI test page not found", status_code=404)
 
+@app.get("/api/dashboard/charts")
+def get_dashboard_charts():
+    """
+    Return real Activity Trends and Risk Zone Distribution data
+    derived from monitored areas' detection history.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    area_mgr = AreaManager()
+    areas = area_mgr.get_all_areas()
+
+    # ── Activity Trends: last 8 weeks ────────────────────────────────────
+    now = datetime.now(timezone.utc)
+    weeks = []
+    for i in range(7, -1, -1):
+        week_end   = now - timedelta(weeks=i)
+        week_start = now - timedelta(weeks=i + 1)
+        weeks.append({
+            "label":         week_end.strftime("%b %d"),
+            "start":         week_start,
+            "end":           week_end,
+            "deforestation": 0.0,
+            "scans":         0,
+        })
+
+    for area in areas:
+        for record in (area.get("detection_history") or []):
+            ts_str = (record.get("after_date") or record.get("timestamp", ""))[:10]
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            for week in weeks:
+                if week["start"] <= ts < week["end"]:
+                    week["scans"] += 1
+                    if record.get("deforestation_detected"):
+                        week["deforestation"] += abs(record.get("forest_loss_percent") or 0)
+                    break
+
+    trends_data = [
+        {
+            "week":          w["label"],
+            "deforestation": round(w["deforestation"], 1),
+            "scans":         w["scans"],
+        }
+        for w in weeks
+    ]
+
+    # ── Risk Zone Distribution: one entry per monitored area ─────────────
+    risk_zones = []
+    for area in areas:
+        history = area.get("detection_history") or []
+        if not history:
+            continue
+
+        losses = [abs(r.get("forest_loss_percent") or 0) for r in history]
+        max_loss = max(losses, default=0)
+
+        if max_loss >= 40:
+            risk_level = "critical"
+        elif max_loss >= 20:
+            risk_level = "high"
+        elif max_loss >= 5:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        # Estimate area in hectares via shoelace formula on polygon coords
+        coords = area.get("coordinates") or []
+        hectares = 0
+        if len(coords) >= 3:
+            n = len(coords)
+            area_deg2 = abs(sum(
+                coords[i][0] * coords[(i + 1) % n][1] - coords[(i + 1) % n][0] * coords[i][1]
+                for i in range(n)
+            )) / 2
+            hectares = round(area_deg2 * 1_232_100)   # deg² → approximate hectares
+        if hectares == 0:
+            hectares = max(50, len(history) * 50)
+
+        risk_zones.append({
+            "id":        area.get("id", ""),
+            "name":      area.get("name", "Unknown"),
+            "riskLevel": risk_level,
+            "area":      hectares,
+        })
+
+    # Sort: critical → high → medium → low
+    _order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    risk_zones.sort(key=lambda z: _order.get(z["riskLevel"], 4))
+
+    return JSONResponse({
+        "trendsData": trends_data,
+        "riskZones":  risk_zones[:10],
+        "timestamp":  now.isoformat(),
+    })
+
+
 @app.get("/api/coordinates")
 def get_coordinates():
     """Return deforestation coordinates as JSON."""
