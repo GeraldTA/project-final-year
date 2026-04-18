@@ -1,0 +1,62 @@
+{
+  "base_dir": ".",
+  "description": "Training labels for deforestation detection model. Format: 0=forest (no deforestation), 1=deforested",
+  "samples": [
+    {
+      "image_path": "raw/sample_forest_01.tif",
+      "label": 0,
+      "split": "train",
+      "region": "Zimbabwe",
+      "date": "2023-01-15"
+    },
+    {
+      "image_path": "raw/sample_forest_02.tif",
+      "label": 0,
+      "split": "train",
+      "region": "Zimbabwe",
+      "date": "2023-02-20"
+    },
+    {
+      "image_path": "raw/sample_deforested_01.tif",
+      "label": 1,
+      "split": "train",
+      "region": "Zimbabwe",
+      "date": "2023-03-10"
+    },
+    {
+      "image_path": "raw/sample_deforested_02.tif",
+      "label": 1,
+      "split": "train",
+      "region": "Zimbabwe",
+      "date": "2023-04-05"
+    },
+    {
+      "image_path": "raw/sample_forest_03.tif",
+      "label": 0,
+      "split": "val",
+      "region": "Zimbabwe",
+      "date": "2023-05-12"
+    },
+    {
+      "image_path": "raw/sample_deforested_03.tif",
+      "label": 1,
+      "split": "val",
+      "region": "Zimbabwe",
+      "date": "2023-06-18"
+    },
+    {
+      "image_path": "raw/sample_forest_04.tif",
+      "label": 0,
+      "split": "test",
+      "region": "Zimbabwe",
+      "date": "2023-07-22"
+    },
+    {
+      "image_path": "raw/sample_deforested_04.tif",
+      "label": 1,
+      "split": "test",
+      "region": "Zimbabwe",
+      "date": "2023-08-30"
+    }
+  ]
+}

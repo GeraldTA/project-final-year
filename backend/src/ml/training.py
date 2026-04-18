@@ -248,6 +248,20 @@ class ModelTrainer:
         
         return metrics
     
+    def evaluate(self, test_loader) -> Dict[str, float]:
+        """
+        Evaluate the model on a test set.
+        
+        Alias for validate() to allow consistent testing interface.
+        
+        Args:
+            test_loader: Test data loader
+        
+        Returns:
+            Dictionary of evaluation metrics (same as validate())
+        """
+        return self.validate(test_loader)
+    
     def train(
         self,
         train_loader,
